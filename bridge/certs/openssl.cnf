@@ -1,0 +1,21 @@
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = Handheld Cam Bridge (local dev)
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+# NOTE: the bridge auto-generates a certificate on first run (via the
+# "selfsigned" package), so you normally never need this file. It's only here
+# for anyone who prefers to mint the cert manually with openssl — set IP.2 to
+# your PC's LAN IP first.
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = 192.168.1.100

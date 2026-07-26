@@ -1,0 +1,13 @@
+# Node
+bridge/node_modules/
+npm-debug.log*
+
+# Per-user TLS certificate (auto-generated on first run, never commit these)
+bridge/certs/key.pem
+bridge/certs/cert.pem
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.bak
+*.bak-*

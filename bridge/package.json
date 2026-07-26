@@ -1,0 +1,16 @@
+{
+  "name": "handheld-cam-bridge",
+  "version": "0.2.0",
+  "description": "WebSocket-to-UDP bridge between the Handheld Cam phone app and the Assetto Corsa CSP Lua app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "pair": "node server.js"
+  },
+  "dependencies": {
+    "node-screenshots": "^0.2.8",
+    "qrcode": "^1.5.4",
+    "selfsigned": "^2.4.1",
+    "ws": "^8.18.0"
+  }
+}
