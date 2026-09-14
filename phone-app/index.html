@@ -14,546 +14,48 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
 <link rel="apple-touch-icon" href="/icon-192.png" />
 <title>Handheld Cam</title>
-<style>
-  :root {
-    --bg: #000;
-    --panel: rgba(20,20,22,.82);
-    --panel-solid: #141416;
-    --hairline: rgba(255,255,255,.14);
-    --text: #f4f4f6;
-    --dim: #9a9aa2;
-    --rec: #ff3b30;
-    --live: #34c759;
-    --warn: #ffcc00;
-    --accent: #ffd60a;
-    --mono: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
-  }
-
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
-
-  html, body {
-    margin: 0;
-    height: 100%;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    overflow: hidden;
-    overscroll-behavior: none;
-    touch-action: none;
-  }
-
-  button { font-family: inherit; cursor: pointer; }
-
-  /* ============================================================
-     VIEWFINDER (fills the screen; live feed sits behind the HUD)
-     ============================================================ */
-  #stage {
-    position: fixed;
-    inset: 0;
-    display: none;               /* revealed after the permission gate */
-  }
-
-  /* everything the filters act on lives in here, so the HUD above stays
-     crisp and cheap to redraw while the picture gets the expensive treatment */
-  #imagelayer { position: absolute; inset: 0; }
-
-  #feed {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    background: #000;
-    display: none;
-  }
-  #stage.feed-on #feed { display: block; }
-
-  /* When the feed is off: a still frame rather than a flat gradient, so the
-     filters (and the framing grid) have something to actually work on. */
-  #backdrop {
-    position: absolute;
-    inset: 0;
-    background:
-      linear-gradient(rgba(5,5,6,.42), rgba(5,5,6,.42)),
-      radial-gradient(120% 80% at 50% 30%, #1a1c22 0%, #0c0d10 55%, #050506 100%);
-  }
-  #backdrop.has-still {
-    background:
-      linear-gradient(rgba(5,5,6,.42), rgba(5,5,6,.42)),
-      url('/preview.jpg') center/cover no-repeat,
-      #0c0d10;
-  }
-  #stage.feed-on #backdrop { display: none; }
-
-  /* ============================================================
-     FILTER OVERLAYS
-     Each layer is inert at opacity 0; a filter class fades in the ones
-     it wants. Blending happens against the picture below because #fx
-     is deliberately not isolated.
-     ============================================================ */
-  #fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-  .fx-l { position: absolute; inset: 0; opacity: 0; transition: opacity .25s ease; }
-
-  .fx-scan {
-    background: repeating-linear-gradient(to bottom,
-      rgba(0,0,0,.42) 0px, rgba(0,0,0,.42) 1px, transparent 1px, transparent 3px);
-    mix-blend-mode: multiply;
-  }
-  /* video noise: turbulence baked into a data URI, jittered so it shimmers */
-  .fx-noise {
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23n)'/></svg>");
-    background-size: 180px 180px;
-    mix-blend-mode: screen;
-    animation: fxNoise .55s steps(4) infinite;
-  }
-  @keyframes fxNoise {
-    0%   { background-position:   0px   0px; }
-    25%  { background-position: -57px  31px; }
-    50%  { background-position:  43px -49px; }
-    75%  { background-position: -29px -22px; }
-    100% { background-position:   0px   0px; }
-  }
-  /* film dust + scratches (generated plate, pure black elsewhere) */
-  .fx-dust {
-    background: url('/dust.webp') center/cover no-repeat;
-    mix-blend-mode: screen;
-    animation: fxDust .42s steps(3) infinite;
-  }
-  @keyframes fxDust {
-    0%   { transform: scale(1.06) translate(0, 0); }
-    33%  { transform: scale(1.06) translate(-1.4%, 1%); }
-    66%  { transform: scale(1.06) translate(1.2%, -1.3%); }
-    100% { transform: scale(1.06) translate(0, 0); }
-  }
-  /* the head-switching band drifting up the frame */
-  .fx-track {
-    inset: auto 0 auto 0;
-    height: 84px;
-    background: linear-gradient(to bottom,
-      transparent, rgba(255,255,255,.06) 30%, rgba(255,255,255,.15) 50%,
-      rgba(255,255,255,.06) 70%, transparent);
-    filter: blur(2px);
-    mix-blend-mode: screen;
-    animation: fxTrack 7.5s linear infinite;
-  }
-  @keyframes fxTrack { from { top: -14%; } to { top: 110%; } }
-
-  .fx-vig { background: radial-gradient(120% 92% at 50% 50%, transparent 42%, rgba(0,0,0,.62) 100%); }
-
-  /* ---------- the filters themselves ----------
-     Each grade is listed once for the viewfinder and once for the picker
-     thumbnails, so a chip always shows the real thing. */
-  #stage.f-vhs  #imagelayer, .fthumb.t-vhs  i { filter: url(#fx-vhs) saturate(1.22) contrast(1.05) brightness(1.03); }
-  #stage.f-vhsc #imagelayer, .fthumb.t-vhsc i { filter: url(#fx-hi8) sepia(.20) saturate(1.28) contrast(.94) brightness(1.08) blur(.5px); }
-  #stage.f-hi8  #imagelayer, .fthumb.t-hi8  i { filter: url(#fx-hi8) saturate(1.06) contrast(1.14) brightness(1.01); }
-  #stage.f-beta #imagelayer, .fthumb.t-beta i { filter: saturate(1.18) contrast(1.16) brightness(1.02); }
-  #stage.f-s8   #imagelayer, .fthumb.t-s8   i { filter: sepia(.44) saturate(1.55) contrast(1.12) brightness(1.06) hue-rotate(-6deg); }
-  #stage.f-noir #imagelayer, .fthumb.t-noir i { filter: grayscale(1) contrast(1.3) brightness(1.04); }
-  #stage.f-neon #imagelayer, .fthumb.t-neon i { filter: url(#fx-neon) saturate(1.45) contrast(1.06) hue-rotate(-10deg); }
-
-  #stage.f-vhs  .fx-scan { opacity: .55; } #stage.f-vhs  .fx-noise { opacity: .17; }
-  #stage.f-vhs  .fx-track { opacity: 1; }  #stage.f-vhs  .fx-vig { opacity: .5; }
-  #stage.f-vhsc .fx-scan { opacity: .38; } #stage.f-vhsc .fx-noise { opacity: .13; }
-  #stage.f-vhsc .fx-vig { opacity: .55; }  #stage.f-vhsc .fx-track { opacity: .7; }
-  #stage.f-hi8  .fx-scan { opacity: .26; } #stage.f-hi8  .fx-noise { opacity: .24; }
-  #stage.f-hi8  .fx-vig { opacity: .36; }
-  #stage.f-beta .fx-scan { opacity: .3; }  #stage.f-beta .fx-noise { opacity: .07; }
-  #stage.f-s8   .fx-dust { opacity: .72; } #stage.f-s8   .fx-noise { opacity: .2; }
-  #stage.f-s8   .fx-vig { opacity: .68; }
-  #stage.f-noir .fx-scan { opacity: .5; }  #stage.f-noir .fx-noise { opacity: .24; }
-  #stage.f-noir .fx-vig { opacity: .5; }
-  #stage.f-neon .fx-scan { opacity: .22; } #stage.f-neon .fx-noise { opacity: .1; }
-  #stage.f-neon .fx-vig { opacity: .58; }
-
-  /* Super 8 gate weave, the frame never sits perfectly still in the gate.
-     Scaled up a touch so the wander never exposes an edge. */
-  #stage.f-s8 #imagelayer { animation: gateWeave 1.7s steps(7) infinite; }
-  @keyframes gateWeave {
-    0%   { transform: scale(1.025) translate(0, 0); }
-    25%  { transform: scale(1.025) translate(.32%, -.28%); }
-    50%  { transform: scale(1.025) translate(-.26%, .24%); }
-    75%  { transform: scale(1.025) translate(.18%, .3%); }
-    100% { transform: scale(1.025) translate(0, 0); }
-  }
-
-  /* camcorder on-screen display */
-  #osd {
-    position: absolute;
-    left: calc(env(safe-area-inset-left) + 14px);
-    bottom: calc(env(safe-area-inset-bottom) + 6px);
-    font-family: var(--mono); font-size: 12px; font-weight: 700;
-    letter-spacing: .06em; color: #fff;
-    text-shadow: 0 0 6px rgba(0,0,0,.9), 0 1px 0 rgba(0,0,0,.9);
-    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 7;
-  }
-  #stage.osd-on #osd { opacity: .92; }
-
-  /* rule-of-thirds grid, like a real camera */
-  #grid {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    opacity: .55;
-  }
-  #grid .v, #grid .h { position: absolute; background: rgba(255,255,255,.28); }
-  #grid .v { top: 0; bottom: 0; width: 1px; }
-  #grid .h { left: 0; right: 0; height: 1px; }
-  #grid .v.a { left: 33.33%; } #grid .v.b { left: 66.66%; }
-  #grid .h.a { top: 33.33%; }  #grid .h.b { top: 66.66%; }
-  #stage.no-grid #grid { display: none; }
-
-  /* attitude / horizon overlay, gives live motion feedback even
-     without the game feed. A rolling line + centre pip. */
-  #attitude {
-    position: absolute;
-    left: 50%; top: 50%;
-    width: 240px; height: 240px;
-    margin: -120px 0 0 -120px;
-    pointer-events: none;
-  }
-  #attitude .roll-line {
-    position: absolute; left: 50%; top: 50%;
-    width: 180px; height: 2px; margin: -1px 0 0 -90px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,.9) 20%, rgba(255,255,255,.9) 80%, transparent);
-    transform-origin: center;
-    will-change: transform;
-  }
-  #attitude .pip { position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; }
-  #attitude .pip::before, #attitude .pip::after {
-    content: ''; position: absolute; background: var(--accent);
-  }
-  #attitude .pip::before { left: 50%; top: -14px; width: 2px; height: 12px; margin-left: -1px; }
-  #attitude .pip::after  { left: -14px; top: 50%; width: 12px; height: 2px; margin-top: -1px; }
-  #attitude .wing { position: absolute; left: 50%; top: 50%; height: 2px; width: 26px; background: var(--accent); }
-  #attitude .wing.l { margin: -1px 0 0 -46px; } #attitude .wing.r { margin: -1px 0 0 20px; }
-
-  /* ---------- top bar: REC + status ---------- */
-  #topbar {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    display: flex; align-items: center; gap: 10px;
-    padding: calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 16px)
-             10px calc(env(safe-area-inset-left) + 16px);
-    z-index: 6;
-  }
-  #rec-pill {
-    display: flex; align-items: center; gap: 7px;
-    background: rgba(0,0,0,.42);
-    padding: 6px 12px; border-radius: 999px;
-    font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: .08em;
-    opacity: .45; transition: opacity .2s;
-  }
-  #rec-pill .rdot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); }
-  #stage.engaged #rec-pill { opacity: 1; }
-  #stage.engaged #rec-pill .rdot { animation: blink 1s steps(1,end) infinite; }
-  @keyframes blink { 50% { opacity: .15; } }
-  #rec-time { font-variant-numeric: tabular-nums; }
-
-  #conn {
-    margin-left: auto;
-    display: flex; align-items: center; gap: 7px;
-    background: rgba(0,0,0,.42);
-    padding: 6px 12px; border-radius: 999px;
-    font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .04em;
-  }
-  #conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); transition: background .2s, box-shadow .2s; }
-  #conn .dot.live { background: var(--live); box-shadow: 0 0 8px var(--live); }
-  #conn .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
-  #conn .dot.down { background: var(--rec); }
-
-  /* ---------- right rail: modes, zoom, shutter, flip ---------- */
-  #rail {
-    position: absolute;
-    top: 0; right: 0; bottom: 0;
-    width: 108px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 16px;
-    padding: calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 4px)
-             calc(env(safe-area-inset-bottom) + 8px) 0;
-    z-index: 6;
-    background: linear-gradient(90deg, transparent, rgba(0,0,0,.35));
-  }
-
-  /* mode selector (vertical text, iOS style) */
-  #modes {
-    display: flex; flex-direction: column; align-items: center; gap: 14px;
-    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .14em;
-  }
-  #modes .mode {
-    color: var(--dim); background: none; border: none; padding: 4px 6px;
-    writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
-    transition: color .15s;
-  }
-  #modes .mode.sel { color: var(--accent); }
-
-  /* No focus ring on the viewfinder controls: Chrome's default focus outline is
-     a square that cuts straight across the round shutter the moment you tap it. */
-  #stage button:focus, #stage button:focus-visible { outline: none; box-shadow: none; }
-
-  /* shutter / engage button.
-     Built as a bare box with the ring drawn by a pseudo-element: a <button>'s
-     own border/background is what used to leave a squared-off edge clipping
-     the ring, and the inner core stays a circle in every state. */
-  #shutter {
-    -webkit-appearance: none; appearance: none;
-    width: 74px; height: 74px; flex: none;
-    padding: 0; margin: 0; border: 0; outline: none;
-    background: none; background-clip: padding-box;
-    border-radius: 50%;
-    position: relative; overflow: visible;
-    display: grid; place-items: center;
-  }
-  #shutter::before {                     /* outer ring */
-    content: ''; position: absolute; inset: 0;
-    border-radius: 50%;
-    border: 3.5px solid #fff;
-    box-sizing: border-box;
-    transition: border-color .18s ease;
-  }
-  #shutter .core {
-    width: 58px; height: 58px;
-    border-radius: 50%;                  /* always round, never a square */
-    background: #fff;
-    transition: width .18s ease, height .18s ease, background-color .18s ease;
-  }
-  #shutter:active .core { width: 52px; height: 52px; }
-  #stage.engaged #shutter::before { border-color: var(--rec); }
-  #stage.engaged #shutter .core {
-    background: var(--rec);
-    width: 46px; height: 46px;
-    border-radius: 50%;
-    animation: recpulse 1.6s ease-in-out infinite;
-  }
-  @keyframes recpulse { 50% { opacity: .55; } }
-  #shutter.pending::before { border-color: var(--warn); animation: recpulse 1s ease-in-out infinite; }
-
-  .rail-btn {
-    width: 46px; height: 46px; border-radius: 50%;
-    background: rgba(0,0,0,.42); border: 1px solid var(--hairline);
-    color: var(--text); display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
-  }
-  .rail-btn.on { border-color: var(--live); color: var(--live); }
-  .rail-btn svg { width: 22px; height: 22px; }
-
-  /* ---------- left rail: quick actions ---------- */
-  #leftrail {
-    position: absolute;
-    left: calc(env(safe-area-inset-left) + 10px); top: 50%;
-    transform: translateY(-50%);
-    display: flex; flex-direction: column; gap: 12px;
-    z-index: 6;
-  }
-
-  /* ---------- readout (moved up top, out of the dial's way) ---------- */
-  #readout {
-    position: absolute;
-    left: 0; right: 108px; top: calc(env(safe-area-inset-top) + 46px);
-    text-align: center;
-    font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .06em;
-    pointer-events: none; z-index: 5;
-  }
-
-  /* ---------- filter picker (slides up over the zoom wheel) ---------- */
-  #filters {
-    position: absolute;
-    left: 0; right: 92px;
-    bottom: calc(env(safe-area-inset-bottom) + 8px);
-    z-index: 8;
-    padding: 8px 0 6px;
-    background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,.35) 70%, transparent);
-    opacity: 0; transform: translateY(14px); pointer-events: none;
-    transition: opacity .2s ease, transform .2s ease;
-  }
-  #stage.filters-on #filters { opacity: 1; transform: none; pointer-events: auto; }
-  #stage.filters-on #zoomdial, #stage.filters-on #osd { opacity: 0; pointer-events: none; }
-  #filter-strip {
-    display: flex; gap: 12px;
-    overflow-x: auto; overflow-y: hidden;
-    padding: 2px calc(env(safe-area-inset-left) + 16px) 2px 16px;
-    scrollbar-width: none; -webkit-overflow-scrolling: touch;
-  }
-  #filter-strip::-webkit-scrollbar { display: none; }
-  .fchip {
-    flex: none; background: none; border: none; padding: 0;
-    display: flex; flex-direction: column; align-items: center; gap: 5px;
-    width: 62px;
-  }
-  .fthumb {
-    position: relative; width: 56px; height: 56px; border-radius: 12px;
-    overflow: hidden; background: #16171b;
-    box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.16);
-    transition: box-shadow .15s, transform .15s;
-  }
-  .fthumb i {
-    position: absolute; inset: 0; display: block;
-    background: #16171b url('/preview.jpg') center/cover no-repeat;
-  }
-  .fchip.sel .fthumb { box-shadow: inset 0 0 0 2.5px var(--accent); transform: scale(1.06); }
-  .flabel {
-    font-family: var(--mono); font-size: 8.5px; font-weight: 700; letter-spacing: .06em;
-    color: var(--dim); text-align: center; line-height: 1.15; white-space: nowrap;
-    max-width: 62px; overflow: hidden; text-overflow: ellipsis;
-  }
-  .fchip.sel .flabel { color: var(--accent); }
-
-  /* ---------- zoom wheel (iPhone-style rotating ruler, bottom) ----------
-     The ruler itself rotates under a fixed needle, so the value under the
-     needle *is* the zoom. The whole SVG area is draggable via a transparent
-     hit rect, hit-testing only painted geometry is why the old thin arc was
-     nearly impossible to grab. */
-  #zoomdial {
-    position: absolute;
-    left: 0; right: 100px;
-    bottom: calc(env(safe-area-inset-bottom) + 12px);
-    z-index: 6;
-    display: flex; flex-direction: column; align-items: center;
-    pointer-events: none;              /* only the wheel itself is interactive */
-  }
-  #zd-head { display: flex; flex-direction: column; align-items: center; line-height: 1; }
-  #zd-value {
-    font-family: var(--mono); font-size: 20px; font-weight: 800; color: var(--accent);
-    letter-spacing: .01em; text-shadow: 0 1px 3px rgba(0,0,0,.75);
-    font-variant-numeric: tabular-nums;
-  }
-  #zd-value.neutral { color: #fff; }
-  #zd-mm {
-    font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--dim);
-    letter-spacing: .16em; margin-top: 3px; text-shadow: 0 1px 2px rgba(0,0,0,.7);
-  }
-  #zoomdial-svg {
-    width: min(100%, 560px); height: auto; margin-top: 1px;
-    pointer-events: auto; touch-action: none;
-    -webkit-touch-callout: none;
-  }
-  #zd-hit { fill: transparent; }
-  #zd-wheel line { stroke: rgba(255,255,255,.45); stroke-width: 1.6; stroke-linecap: round; }
-  #zd-wheel line.major { stroke: rgba(255,255,255,.92); stroke-width: 2.4; }
-  #zd-wheel line.unity { stroke: var(--accent); stroke-width: 2.8; }
-  #zd-wheel text {
-    fill: rgba(255,255,255,.82); font-family: var(--mono); font-size: 11px; font-weight: 700;
-  }
-  #zd-wheel text.unity { fill: var(--accent); }
-  #zd-needle { stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; }
-  #zd-needle-tip { fill: var(--accent); }
-  #zoomdial-svg.active #zd-wheel line { stroke: rgba(255,255,255,.62); }
-  #zoomdial-svg.active #zd-wheel line.major { stroke: #fff; }
-
-  /* ============================================================
-     PERMISSION / CONNECTION GATE
-     ============================================================ */
-  #gate {
-    position: fixed; inset: 0;
-    background: radial-gradient(120% 90% at 50% 0%, #16181e, #050506 70%);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 16px; padding: 28px; text-align: center; z-index: 30;
-  }
-  #gate .logo { font-size: 34px; }
-  #gate h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: .01em; }
-  #gate p { color: var(--dim); font-size: 13px; line-height: 1.5; margin: 0; max-width: 300px; }
-  #gate .status { font-family: var(--mono); font-size: 12px; color: var(--dim); min-height: 16px; }
-  #gate .status b { color: var(--live); }
-  .btn-primary {
-    background: #fff; color: #000; border: none; border-radius: 999px;
-    padding: 15px 30px; font-size: 15px; font-weight: 700; font-family: var(--sans);
-  }
-  .btn-ghost {
-    background: transparent; color: var(--text); border: 1px solid var(--hairline);
-    border-radius: 999px; padding: 11px 20px; font-size: 13px; font-family: var(--sans);
-  }
-  #gate .row { display: flex; gap: 8px; width: 100%; max-width: 320px; }
-  #gate input {
-    flex: 1; background: #0e0f12; border: 1px solid var(--hairline); color: var(--text);
-    font-family: var(--mono); font-size: 13px; padding: 12px; border-radius: 10px; min-width: 0;
-  }
-  #gate .hint { font-size: 11px; color: var(--dim); max-width: 300px; line-height: 1.5; }
-  #gate details { max-width: 320px; width: 100%; text-align: left; }
-  #gate summary { color: var(--dim); font-size: 12px; cursor: pointer; padding: 6px 0; }
-  #gate details p { text-align: left; max-width: none; margin: 6px 0; }
-
-  /* ============================================================
-     SETTINGS SHEET
-     ============================================================ */
-  #sheet-scrim {
-    position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 20;
-    opacity: 0; pointer-events: none; transition: opacity .2s;
-  }
-  #sheet-scrim.open { opacity: 1; pointer-events: auto; }
-  #sheet {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 21;
-    background: var(--panel-solid); border-top: 1px solid var(--hairline);
-    border-radius: 20px 20px 0 0;
-    padding: 10px 20px calc(env(safe-area-inset-bottom) + 20px);
-    transform: translateY(100%); transition: transform .26s cubic-bezier(.2,.8,.2,1);
-    max-height: 82vh; overflow-y: auto;
-  }
-  #sheet.open { transform: translateY(0); }
-  #sheet .grabber { width: 40px; height: 5px; border-radius: 3px; background: var(--hairline); margin: 4px auto 14px; }
-  #sheet h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 18px 0 10px; }
-  #sheet h2:first-of-type { margin-top: 4px; }
-  .field { margin-bottom: 14px; }
-  .field label { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); margin-bottom: 6px; font-family: var(--mono); }
-  .field label span.val { color: var(--text); }
-  input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; }
-  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid rgba(255,255,255,.06); }
-  .toggle-row span { font-size: 13px; }
-  .sw { width: 46px; height: 28px; border-radius: 999px; background: #3a3a3e; position: relative; transition: background .2s; flex: none; }
-  .sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: transform .2s; }
-  .sw.on { background: var(--live); } .sw.on::after { transform: translateX(18px); }
-  .sheet-row { display: flex; gap: 8px; margin-bottom: 12px; }
-  #server-url { flex: 1; background: #0e0f12; border: 1px solid var(--hairline); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 11px; border-radius: 10px; min-width: 0; }
-  #connect-btn { background: #0e0f12; border: 1px solid var(--hairline); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 11px 16px; border-radius: 10px; }
-  #calibrate-full { width: 100%; background: var(--accent); color: #000; border: none; font-weight: 700; font-size: 14px; padding: 13px; border-radius: 12px; margin-bottom: 6px; }
-  #ar-btn { width: 100%; background: #0e0f12; color: var(--text); border: 1px solid var(--hairline); font-weight: 700; font-size: 14px; padding: 13px; border-radius: 12px; margin-bottom: 8px; }
-  #ar-btn:disabled { opacity: .45; }
-  #stage.xr-on #feed, #stage.xr-on #backdrop { display: none; }  /* AR passthrough shows through */
-  .sheet-note { font-size: 11px; color: var(--dim); line-height: 1.5; }
-
-  /* landscape tweaks, the reference is a landscape camera view */
-  @media (orientation: landscape) and (max-height: 480px) {
-    #attitude { width: 200px; height: 200px; margin: -100px 0 0 -100px; }
-  }
-</style>
+<link rel="stylesheet" href="/app.css" />
 </head>
 <body>
 
-<!-- ============ PERMISSION / CONNECTION GATE ============ -->
+<!-- ============ CONNECT GATE ============ -->
 <div id="gate">
-  <div class="logo">🎥</div>
-  <h1>Handheld Cam</h1>
-  <p>Steer the in-game camera with your phone. Tap Connect to allow motion access and pair with the bridge.</p>
-  <button class="btn-primary" id="gate-start">Connect</button>
-  <div class="status" id="gate-status">not connected</div>
+  <div class="card">
+    <img class="logo" src="/icon-192.png" alt="" />
+    <h1>Handheld Cam</h1>
+    <p>Your phone is the camera. Aim it, zoom it and walk it around your Assetto Corsa replay or session.</p>
+    <button class="btn-primary" id="gate-start">Connect</button>
+    <div class="status" id="gate-status">not connected</div>
 
-  <div id="cert-help" class="hint" hidden>
-    Can't reach the bridge. It uses a self-signed certificate, so the phone has to
-    trust it once: <a id="cert-link" href="/health" target="_blank" rel="noopener">open this link</a>,
-    tap <b>Advanced → Proceed</b>, then come back and hit Connect again.
+    <div id="cert-help" class="hint" hidden>
+      Can't reach the bridge. It uses a self-signed certificate, so the phone has to
+      trust it once: <a id="cert-link" href="/health" target="_blank" rel="noopener">open this link</a>,
+      tap <b>Advanced → Proceed</b> (Safari: <b>Show Details → visit this website</b>),
+      then come back and tap Connect again.
+    </div>
+
+    <div class="divider">or type the code</div>
+    <div class="row">
+      <input id="gate-code" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 192.168.1.42" />
+      <button class="btn-ghost" id="gate-connect">Go</button>
+    </div>
+    <div class="hint">Scanning the QR in the game's Handheld Cam window opens this page and connects by itself.</div>
+
+    <details>
+      <summary>Connect over a USB cable (Android)</summary>
+      <p class="hint">1. Enable USB debugging on the phone. 2. On the PC run <b>usb-android.bat</b> (in the <b>bridge</b> folder). 3. Open <b>https://localhost:8787</b> here. There's no USB option for iPhone, use the QR code or Wi-Fi.</p>
+    </details>
   </div>
-
-  <div class="row">
-    <input id="gate-code" type="text" inputmode="decimal" placeholder="Type code, e.g. 192.168.1.42" />
-    <button class="btn-ghost" id="gate-connect">Go</button>
-  </div>
-  <div class="hint">Fastest: scan the QR code shown on your PC with your phone's camera, it opens this page and connects automatically. Otherwise type the code shown in the game's Connect tab.</div>
-
-  <details>
-    <summary>Connect over USB cable (Android)</summary>
-    <p class="hint">1. Enable USB debugging on the phone. 2. On the PC run <b>usb-android.bat</b> (in the <b>bridge/</b> folder). 3. Open <b>https://localhost:8787</b> here. USB port-forwarding for iPhone isn't practical, use QR or Wi-Fi.</p>
-  </details>
 </div>
 
 <!-- ============ FILTER PRIMITIVES ============
      Channel-splitting has to happen inside an SVG filter: it works on the one
      <img> we already have, so the MJPEG feed is never decoded more than once.
-     sRGB interpolation keeps the fringes saturated instead of washed out. -->
-<svg id="fx-defs" width="0" height="0" aria-hidden="true" focusable="false">
+     primitiveUnits are fractions of the element, so the same filter reads
+     correctly on the full-screen viewfinder and on a 56px picker thumbnail. -->
+<svg id="fx-defs" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
   <defs>
-    <!-- VHS: red/blue pulled apart and smeared sideways, like tape crosstalk.
-         primitiveUnits are fractions of the element, so the same filter reads
-         correctly on a full-screen viewfinder and on a 56px picker thumbnail;
-         with pixel offsets the thumbnails came out wildly over-fringed. -->
+    <!-- VHS: red/blue pulled apart and smeared sideways, like tape crosstalk -->
     <filter id="fx-vhs" x="-3%" y="-3%" width="106%" height="106%"
             primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB">
       <feOffset in="SourceGraphic" dx="0.006" dy="0" result="ro" />
@@ -611,7 +113,6 @@
     <div id="backdrop"></div>
   </div>
 
-  <!-- filter overlays: only the ones the active filter enables are painted -->
   <div id="fx" aria-hidden="true">
     <div class="fx-l fx-scan"></div>
     <div class="fx-l fx-noise"></div>
@@ -628,27 +129,42 @@
 
   <div id="attitude">
     <div class="roll-line" id="roll-line"></div>
-    <div class="wing l"></div><div class="wing r"></div>
     <div class="pip"></div>
   </div>
 
+  <div id="flash"></div>
+
   <div id="topbar">
-    <div id="rec-pill"><span class="rdot"></span><span id="rec-time">REC</span></div>
-    <div id="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span><span id="conn-lat"></span></div>
+    <div id="tb-left">
+      <button class="chip" id="home-chip" hidden title="Bring the camera back to where it started">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+        <span id="home-dist">0.0 m</span>
+      </button>
+      <span class="chip" id="hold-chip" hidden>HOLD</span>
+    </div>
+    <div id="tb-right">
+      <div class="chip" id="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span><span id="conn-lat"></span></div>
+      <div class="chip" id="batt" hidden><span class="cell"><span class="lvl" id="batt-lvl"></span></span><span id="batt-pct"></span></div>
+    </div>
   </div>
 
+  <div id="timer"><span class="rdot"></span><span id="rec-time">00:00:00</span></div>
+  <div id="readout"></div>
+  <div id="toast"></div>
+  <div id="banner" hidden><span id="banner-text"></span><button id="banner-btn" hidden>Take over</button></div>
+
   <div id="leftrail">
-    <button class="rail-btn" id="recenter-btn" title="Recenter">
+    <button class="rail-btn" id="recenter-btn" title="Recenter" aria-label="Recenter">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>
     </button>
-    <button class="rail-btn" id="feed-btn" title="Live game feed">
+    <button class="rail-btn" id="feed-btn" title="Live game feed" aria-label="Live game feed">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 10l4.5-2.5v9L15 14M4 6h9a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
     </button>
-    <button class="rail-btn" id="grid-btn" title="Grid">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
+    <button class="rail-btn" id="grid-btn" title="Grid" aria-label="Grid">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
     </button>
-    <button class="rail-btn" id="filter-btn" title="Filters">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M7.5 4v16M16.5 4v16M2.5 9h5M2.5 15h5M16.5 9h5M16.5 15h5"/></svg>
+    <button class="rail-btn" id="filter-btn" title="Looks" aria-label="Looks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><circle cx="15" cy="9" r="5.5"/><circle cx="12" cy="14.5" r="5.5"/></svg>
     </button>
   </div>
 
@@ -658,1034 +174,138 @@
       <button class="mode sel" data-mode="video">VIDEO</button>
       <button class="mode" data-mode="photo">PHOTO</button>
     </div>
-    <button id="shutter"><span class="core"></span></button>
-    <button class="rail-btn" id="settings-btn" title="Settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    <div class="rail-spacer"></div>
+    <div class="rail-group">
+      <button id="shutter" aria-label="Record. Hold and drag to move the camera"><span class="core"></span></button>
+      <div id="shutter-hint">HOLD<br/>TO MOVE</div>
+    </div>
+    <button class="rail-btn" id="settings-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/></svg>
     </button>
   </div>
 
-  <div id="readout">P 0.0°&nbsp;·&nbsp;R 0.0°&nbsp;·&nbsp;Y 0.0°</div>
+  <div id="zoom">
+    <div id="zpresets">
+      <button class="zp" data-z="0.5">.5</button>
+      <button class="zp sel" data-z="1">1×</button>
+      <button class="zp" data-z="2">2</button>
+      <button class="zp" data-z="5">5</button>
+    </div>
+    <div id="zoomdial">
+      <div id="zd-head">
+        <div id="zd-value">1.0×</div>
+        <div id="zd-mm">24 MM</div>
+      </div>
+      <svg id="zoomdial-svg" viewBox="0 0 400 104" aria-hidden="true">
+        <defs>
+          <linearGradient id="zd-edge-grad" x1="0" x2="1">
+            <stop offset="0"    stop-color="#000" />
+            <stop offset="0.14" stop-color="#fff" />
+            <stop offset="0.86" stop-color="#fff" />
+            <stop offset="1"    stop-color="#000" />
+          </linearGradient>
+          <mask id="zd-edge-fade">
+            <rect x="0" y="0" width="400" height="104" fill="url(#zd-edge-grad)" />
+          </mask>
+        </defs>
+        <!-- full-area drag target: SVG only hit-tests painted geometry -->
+        <rect id="zd-hit" x="0" y="0" width="400" height="104" />
+        <g id="zd-wheel" mask="url(#zd-edge-fade)"></g>
+        <line id="zd-needle" x1="200" y1="8" x2="200" y2="26" />
+        <path id="zd-needle-tip" d="M194 4 L206 4 L200 12 Z" />
+      </svg>
+    </div>
+  </div>
 
   <div id="filters">
     <div id="filter-strip"></div>
   </div>
-
-  <div id="zoomdial">
-    <div id="zd-head">
-      <div id="zd-value">1.0×</div>
-      <div id="zd-mm">24 MM</div>
-    </div>
-    <svg id="zoomdial-svg" viewBox="0 0 400 104" aria-hidden="true">
-      <defs>
-        <!-- the ruler dissolves toward both ends instead of being cut off -->
-        <linearGradient id="zd-edge-grad" x1="0" x2="1">
-          <stop offset="0"    stop-color="#000" />
-          <stop offset="0.14" stop-color="#fff" />
-          <stop offset="0.86" stop-color="#fff" />
-          <stop offset="1"    stop-color="#000" />
-        </linearGradient>
-        <mask id="zd-edge-fade">
-          <rect x="0" y="0" width="400" height="104" fill="url(#zd-edge-grad)" />
-        </mask>
-      </defs>
-      <!-- full-area drag target: SVG only hit-tests painted geometry -->
-      <rect id="zd-hit" x="0" y="0" width="400" height="104" />
-      <g id="zd-wheel" mask="url(#zd-edge-fade)"></g>
-      <line id="zd-needle" x1="200" y1="8" x2="200" y2="26" />
-      <path id="zd-needle-tip" d="M194 4 L206 4 L200 12 Z" />
-    </svg>
-  </div>
 </div>
 
-<!-- ============ SETTINGS SHEET ============ -->
+<!-- hold-to-move thumbstick, positioned over the shutter while held -->
+<div id="stick" aria-hidden="true">
+  <span class="lbl" id="stick-lbl">WALK</span>
+  <span class="chev u"></span><span class="chev d"></span><span class="chev l"></span><span class="chev r"></span>
+  <div class="knob" id="stick-knob"></div>
+</div>
+
+<!-- ============ SETTINGS ============ -->
 <div id="sheet-scrim"></div>
-<div id="sheet">
-  <div class="grabber"></div>
+<div id="sheet" role="dialog" aria-label="Settings">
+  <header><h1>Settings</h1><button id="sheet-done">Done</button></header>
 
   <h2>Connection</h2>
-  <div class="sheet-row">
-    <input id="server-url" type="text" placeholder="leave blank to reconnect" />
-    <button id="connect-btn">Connect</button>
+  <div class="group">
+    <div class="link-grid">
+      <span class="k">Bridge</span><span class="v"><span class="dot" id="lk-bridge-dot"></span><span id="lk-bridge">not connected</span></span>
+      <span class="k">Game</span><span class="v"><span class="dot" id="lk-game-dot"></span><span id="lk-game">waiting</span></span>
+      <span class="k">Latency</span><span class="v" id="lk-lat">–</span>
+      <span class="k">Motion</span><span class="v" id="lk-sensor">–</span>
+    </div>
+    <div class="sheet-row">
+      <input id="server-url" type="text" autocomplete="off" placeholder="Bridge address (blank = this PC)" />
+      <button id="connect-btn">Connect</button>
+    </div>
   </div>
-  <div class="sheet-note" id="sheet-conn-note">Already auto-connected to the PC that served this page. Leave the box blank and tap Connect to reconnect, or type another bridge's address to switch.</div>
 
   <h2>Camera feel</h2>
-  <button id="calibrate-full">Recenter / level horizon</button>
-  <div class="field">
-    <label>Sensitivity <span class="val" id="sens-val">0.70</span></label>
-    <input type="range" id="sens" min="0.2" max="3" step="0.05" value="0.7" />
+  <div class="group">
+    <button class="btn-row" id="calibrate-full">Recenter / level horizon</button>
+    <div class="slider-row">
+      <label>Sensitivity <span class="val" id="sens-val">0.70</span></label>
+      <input type="range" id="sens" min="0.2" max="3" step="0.05" value="0.7" />
+    </div>
+    <div class="slider-row">
+      <label>Stabilisation <span class="val" id="smooth-val">0.40</span></label>
+      <input type="range" id="smooth" min="0" max="0.95" step="0.01" value="0.4" />
+    </div>
+    <div class="slider-row">
+      <label>Deadzone <span class="val" id="dead-val">0.70°</span></label>
+      <input type="range" id="dead" min="0" max="3" step="0.05" value="0.7" />
+    </div>
   </div>
-  <div class="field">
-    <label>Stabilisation (smoothing) <span class="val" id="smooth-val">0.40</span></label>
-    <input type="range" id="smooth" min="0" max="0.95" step="0.01" value="0.4" />
+
+  <h2>Moving the camera</h2>
+  <div class="group">
+    <div class="slider-row">
+      <label>Walk speed <span class="val" id="speed-val">2.5 m/s</span></label>
+      <input type="range" id="speed" min="0.5" max="12" step="0.5" value="2.5" />
+    </div>
+    <div class="srow">
+      <span>Style<small>Walk stays level, Fly goes where you aim</small></span>
+      <div class="seg" id="seg-fly"><button data-v="walk">Walk</button><button data-v="fly">Fly</button></div>
+    </div>
+    <button class="btn-row" id="home-btn">Bring camera home</button>
+    <button class="btn-row" id="ar-btn">Start AR 6DoF movement</button>
   </div>
-  <div class="field">
-    <label>Deadzone <span class="val" id="dead-val">0.70°</span></label>
-    <input type="range" id="dead" min="0" max="3" step="0.05" value="0.7" />
-  </div>
+  <div class="sheet-note">Hold the <b>record button</b> and drag it like a thumbstick to walk the camera around: up is forward, sideways strafes. Works on every phone, iPhone included. <span id="ar-note">AR movement (Android Chrome) tracks the phone's real position instead.</span></div>
 
   <h2>Axes</h2>
-  <div class="toggle-row"><span>Invert pitch (up/down)</span><div class="sw on" id="inv-pitch"></div></div>
-  <div class="toggle-row"><span>Invert yaw (left/right)</span><div class="sw" id="inv-yaw"></div></div>
-  <div class="toggle-row"><span>Invert roll (tilt)</span><div class="sw on" id="inv-roll"></div></div>
+  <div class="group">
+    <div class="srow"><span>Invert pitch (up/down)</span><button class="sw" id="inv-pitch" role="switch"></button></div>
+    <div class="srow"><span>Invert yaw (left/right)</span><button class="sw" id="inv-yaw" role="switch"></button></div>
+    <div class="srow"><span>Invert roll (tilt)</span><button class="sw" id="inv-roll" role="switch"></button></div>
+  </div>
 
   <h2>Display</h2>
-  <div class="toggle-row"><span>Show grid</span><div class="sw on" id="tg-grid"></div></div>
-  <div class="toggle-row"><span>Show level indicator</span><div class="sw on" id="tg-attitude"></div></div>
-  <div class="toggle-row"><span>Keep screen awake</span><div class="sw on" id="tg-wake"></div></div>
-  <div class="toggle-row"><span>Fullscreen (hide address bar)</span><div class="sw on" id="tg-fs"></div></div>
-  <div class="sheet-note" id="fs-note">Fullscreen hides the browser's address bar, and with it your PC's IP. On iPhone, Safari can't go fullscreen from a page: use <b>Share → Add to Home Screen</b> once and open it from the home screen instead, which drops the address bar entirely.</div>
+  <div class="group">
+    <div class="srow"><span>Grid</span><button class="sw" id="tg-grid" role="switch"></button></div>
+    <div class="srow"><span>Level indicator</span><button class="sw" id="tg-attitude" role="switch"></button></div>
+    <div class="srow"><span>Haptics</span><button class="sw" id="tg-haptics" role="switch"></button></div>
+    <div class="srow"><span>Shutter sound</span><button class="sw" id="tg-sound" role="switch"></button></div>
+    <div class="srow"><span>Keep screen awake</span><button class="sw" id="tg-wake" role="switch"></button></div>
+    <div class="srow"><span>Fullscreen<small>Hides the address bar, and your PC's IP</small></span><button class="sw" id="tg-fs" role="switch"></button></div>
+  </div>
+  <div class="sheet-note" id="fs-note">On iPhone, Safari can't go fullscreen from a page: use <b>Share → Add to Home Screen</b> once and open it from there instead.</div>
 
-  <h2>Movement (AR · 6DoF)</h2>
-  <button id="ar-btn">Start AR 6DoF movement</button>
-  <div class="sheet-note" id="ar-note">Android Chrome only. Uses your phone's AR tracking so physically stepping or leaning moves the in-game camera: closer to objects, or out a window. It also removes the near-upright flip. iPhone isn't supported (Safari has no WebXR AR); the gyro still works there.</div>
-
-  <div class="sheet-note" style="margin-top:14px">Handheld Cam · connects to the bridge on your PC over WebSocket.</div>
+  <h2>&nbsp;</h2>
+  <div class="group">
+    <button class="btn-row danger" id="reset-btn">Reset all settings</button>
+  </div>
+  <div class="sheet-note" id="about-note">Handheld Cam · connects to the bridge on your PC over WebSocket.</div>
 </div>
 
-<script>
-(function () {
-  'use strict';
-
-  const el = (id) => document.getElementById(id);
-  const TAU = Math.PI * 2, DEG = 180 / Math.PI, RAD = Math.PI / 180;
-
-  // ---------------- state ----------------
-  let ws = null;
-  let wsUrl = '';
-  let engaged = false;                 // shutter / REC state (drives in-game camera)
-  let mode = 'video';                  // video | photo | slomo
-  let recStart = 0;
-
-  // ---- zoom wheel ----
-  // The phone sends a zoom *factor*, not an absolute FOV: the game applies it
-  // to whatever FOV the current camera actually uses, so 1.0× is exactly the
-  // game's own framing and there's no jump when you leave the detent.
-  const Z_MIN = 0.5, Z_MAX = 15;
-  const Z_LN0 = Math.log(Z_MIN), Z_LNSPAN = Math.log(Z_MAX) - Math.log(Z_MIN);
-  let zoomFactor = 1;                  // 1 = neutral (no FOV override at all)
-  let manualConnect = false;           // user typed a URL; stop auto-guessing
-  let motionReady = false;             // sensors started (permission granted)
-  let pendingEngage = false;           // shutter pressed while still connecting
-
-  const settings = {
-    sensitivity: 0.7,                  // calmer than 1:1 by default (raise for more range)
-    smoothing: 0.4,                    // a bit more stabilisation out of the box
-    deadzone: 0.7,                     // degrees, ignore small hand shake
-    // pitch (up/down) and roll (tilt) inverted by default: matches how a real
-    // camera moves when you tilt the phone.
-    invPitch: true, invYaw: false, invRoll: true,
-    grid: true, attitude: true, wake: true,
-    fullscreen: true,                  // hides the address bar (and the bridge IP)
-  };
-
-  // ---------------- quaternion helpers (x,y,z,w) ----------------
-  // Working with a full orientation quaternion instead of raw Euler
-  // beta/gamma/alpha is what kills the gimbal lock: gamma flips at ±90°
-  // and beta jumps near ±180°, so any Euler pipeline breaks exactly when
-  // you try to sweep to 90°/180°. Quaternions stay well-defined everywhere.
-  function qMul(a, b) {
-    return {
-      x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-      y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-      z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-      w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
-    };
-  }
-  function qConj(q) { return { x: -q.x, y: -q.y, z: -q.z, w: q.w }; }
-  function qNorm(q) {
-    let n = Math.hypot(q.x, q.y, q.z, q.w) || 1;
-    return { x: q.x/n, y: q.y/n, z: q.z/n, w: q.w/n };
-  }
-  const Q_IDENT = { x: 0, y: 0, z: 0, w: 1 };
-
-  // W3C deviceorientation -> quaternion, screen-orientation aware.
-  // (the standard three.js DeviceOrientationControls construction)
-  const Q_SCREEN_FLIP = { x: -Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 }; // -90° about X: device looks out its back
-  function eulerYXZToQuat(x, y, z) {
-    const c1 = Math.cos(x/2), c2 = Math.cos(y/2), c3 = Math.cos(z/2);
-    const s1 = Math.sin(x/2), s2 = Math.sin(y/2), s3 = Math.sin(z/2);
-    return {
-      x: s1*c2*c3 + c1*s2*s3,
-      y: c1*s2*c3 - s1*c2*s3,
-      z: c1*c2*s3 - s1*s2*c3,
-      w: c1*c2*c3 + s1*s2*s3,
-    };
-  }
-  function orientationQuat(alphaDeg, betaDeg, gammaDeg, screenDeg) {
-    const a = (alphaDeg || 0) * RAD, b = (betaDeg || 0) * RAD, g = (gammaDeg || 0) * RAD;
-    const o = (screenDeg || 0) * RAD;
-    let q = eulerYXZToQuat(b, a, -g);
-    q = qMul(q, Q_SCREEN_FLIP);
-    // screen-orientation compensation: rotate -o about Z
-    const s = { x: 0, y: 0, z: Math.sin(-o/2), w: Math.cos(-o/2) };
-    q = qMul(q, s);
-    return qNorm(q);
-  }
-
-  // angular distance (degrees) between two unit quaternions
-  function qAngleBetween(a, b) {
-    let d = Math.abs(a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w);
-    return 2 * Math.acos(Math.min(1, d)) * DEG;
-  }
-
-  // scale the rotation angle of a unit quaternion (for sensitivity), with a
-  // deadzone on the angle. Keeps the same hemisphere as the previous frame so
-  // the angle can grow *continuously* past 180°, otherwise crossing 180°
-  // snaps the axis to the opposite side and the camera jolts across the screen.
-  let prevDelta = { x: 0, y: 0, z: 0, w: 1 };
-  function qScaleAngle(q, scale, deadzoneDeg) {
-    if (q.x*prevDelta.x + q.y*prevDelta.y + q.z*prevDelta.z + q.w*prevDelta.w < 0) {
-      q = { x: -q.x, y: -q.y, z: -q.z, w: -q.w };
-    }
-    prevDelta = q;
-    const vlen = Math.hypot(q.x, q.y, q.z);
-    if (vlen < 1e-6) return Q_IDENT;
-    const half = Math.atan2(vlen, q.w);      // 0..π (w may be negative → angle up to 360°)
-    if (half * 2 * DEG < deadzoneDeg) return Q_IDENT;
-    const nx = q.x/vlen, ny = q.y/vlen, nz = q.z/vlen;
-    const newHalf = half * scale;
-    const sh = Math.sin(newHalf), ch = Math.cos(newHalf);
-    return { x: nx*sh, y: ny*sh, z: nz*sh, w: ch };
-  }
-
-  function qSlerp(a, b, t) {
-    let dot = a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
-    if (dot < 0) { b = { x: -b.x, y: -b.y, z: -b.z, w: -b.w }; dot = -dot; }
-    if (dot > 0.9995) {
-      return qNorm({ x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t, z: a.z+(b.z-a.z)*t, w: a.w+(b.w-a.w)*t });
-    }
-    const th0 = Math.acos(dot), th = th0*t;
-    const s0 = Math.cos(th) - dot*Math.sin(th)/Math.sin(th0);
-    const s1 = Math.sin(th)/Math.sin(th0);
-    return { x: a.x*s0+b.x*s1, y: a.y*s0+b.y*s1, z: a.z*s0+b.z*s1, w: a.w*s0+b.w*s1 };
-  }
-
-  // rotate a vector by a quaternion (v' = q v q*)
-  function qRotateVec(q, v) {
-    const cx = q.y*v.z - q.z*v.y, cy = q.z*v.x - q.x*v.z, cz = q.x*v.y - q.y*v.x;
-    const tx = 2*cx, ty = 2*cy, tz = 2*cz;
-    const c2x = q.y*tz - q.z*ty, c2y = q.z*tx - q.x*tz, c2z = q.x*ty - q.y*tx;
-    return { x: v.x + q.w*tx + c2x, y: v.y + q.w*ty + c2y, z: v.z + q.w*tz + c2z };
-  }
-
-  // Attitude for the HUD, taken from the rotated basis vectors rather than an
-  // Euler conversion: quaternion->Euler flips by 180° at its singularities
-  // (upright pitch, ±90° yaw), which made the level indicator snap and lie
-  // exactly when the phone was moving through those poses.
-  let lastRoll = 0;
-  function qToPRY(q) {
-    const look = qRotateVec(q, { x: 0, y: 0, z: -1 });   // camera forward at rest
-    const up   = qRotateVec(q, { x: 0, y: 1, z: 0 });
-    const ln = Math.hypot(look.x, look.y, look.z) || 1;
-    const lx = look.x/ln, ly = look.y/ln, lz = look.z/ln;
-    const un = Math.hypot(up.x, up.y, up.z) || 1;
-    const ux = up.x/un, uy = up.y/un, uz = up.z/un;
-
-    const pitch = Math.asin(Math.max(-1, Math.min(1, ly))) * DEG;
-    // screen-right = look x up (right-handed, -z forward)
-    let rx = ly*uz - lz*uy, ry = lz*ux - lx*uz, rz = lx*uy - ly*ux;
-    const rn = Math.hypot(rx, ry, rz);
-    let roll = lastRoll, horizon = false;
-    if (rn > 1e-5) {
-      ry /= rn;
-      // How much of world-up lands in the screen plane, cos(pitch). Pointing
-      // at the zenith or straight down it vanishes and screen roll stops being
-      // defined at all, so hold the last value and let the caller fade the
-      // horizon out instead of snapping the line through 180°.
-      if (Math.hypot(ry, uy) > 0.12) {
-        roll = Math.atan2(ry, uy) * DEG;    // world-up, from screen-up toward screen-right
-        lastRoll = roll;
-        horizon = true;
-      }
-    }
-    const yaw = Math.atan2(lx, -lz) * DEG;
-    return { pitch, roll, yaw, horizon };
-  }
-
-  // ---------------- motion state ----------------
-  let rawQ = { x: 0, y: 0, z: 0, w: 1 };     // latest device orientation
-  let baseQ = { x: 0, y: 0, z: 0, w: 1 };    // captured on calibrate
-  let smQ = { x: 0, y: 0, z: 0, w: 1 };      // smoothed delta we send
-  let holdQ = null;                          // frozen delta for PHOTO mode
-  let haveReading = false;
-
-  // ---- WebXR 6DoF (AR) state ----
-  let xrSession = null;
-  let xrActive = false;                      // an AR session is driving motion
-  let xrEverUsed = false;                    // once true, keep sending position
-  let xrRefSpace = null;
-  let xrLastPos = { x: 0, y: 0, z: 0 };      // latest AR position (metres, world)
-  let xrBasePos = { x: 0, y: 0, z: 0 };      // captured on calibrate
-  let xrPos = { x: 0, y: 0, z: 0 };          // position to send (car frame: +x right, +y up, +z fwd)
-
-  function screenAngle() {
-    if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
-    if (typeof window.orientation === 'number') return window.orientation;
-    return 0;
-  }
-
-  // ---------------- permission gate ----------------
-  // One button does the lot: motion permission, then prime + connect, then in.
-  async function startEverything(url) {
-    goFullscreen();
-    try {
-      if (!motionReady) {
-        if (typeof DeviceOrientationEvent !== 'undefined' &&
-            typeof DeviceOrientationEvent.requestPermission === 'function') {
-          const res = await DeviceOrientationEvent.requestPermission();
-          if (res !== 'granted') { setGateStatus('motion access denied'); return; }
-        }
-        startSensors();
-        motionReady = true;
-      }
-    } catch (e) {
-      setGateStatus('motion error: ' + e.message);
-      return;
-    }
-    enterApp();
-    ensureConnected(url);
-  }
-  el('gate-start').addEventListener('click', () => startEverything());
-
-  function setGateStatus(t) { el('gate-status').innerHTML = t; }
-
-  function enterApp() {
-    el('gate').style.display = 'none';
-    el('stage').style.display = 'block';
-    applyDisplayToggles();
-    if (settings.wake) requestWakeLock();
-  }
-
-  // Fullscreen keeps the browser's address bar, and with it the bridge's IP,
-  // off the screen. Android honours this from a tap; iOS Safari doesn't support
-  // it on iPhone, where Add to Home Screen is the equivalent.
-  function goFullscreen() {
-    if (!settings.fullscreen) return;
-    const d = document.documentElement;
-    if (document.fullscreenElement || document.webkitFullscreenElement) return;
-    try {
-      const fn = d.requestFullscreen || d.webkitRequestFullscreen;
-      if (fn) {
-        const p = fn.call(d, { navigationUI: 'hide' });
-        if (p && p.catch) p.catch(() => {});
-      }
-    } catch (_) {}
-  }
-  function exitFullscreen() {
-    try {
-      const fn = document.exitFullscreen || document.webkitExitFullscreen;
-      if (fn && (document.fullscreenElement || document.webkitFullscreenElement)) fn.call(document);
-    } catch (_) {}
-  }
-
-  let absoluteActive = false;
-  function startSensors() {
-    const apply = (e, absolute) => {
-      if (xrActive) return;                         // AR session owns orientation
-      if (e.alpha === null && e.beta === null && e.gamma === null) return;
-      if (absolute) absoluteActive = true;
-      else if (absoluteActive) return;   // once we have compass-referenced data, stick with it
-      const q = orientationQuat(e.alpha, e.beta, e.gamma, screenAngle());
-      // Outlier rejection: deviceorientation's Euler angles get noisy/jumpy
-      // near an upright pose (beta ≈ ±90°, the gimbal singularity), which
-      // shows up as sudden camera flips. A jump this large in one ~16 ms
-      // update isn't a real hand movement, so drop it.
-      if (haveReading && qAngleBetween(q, rawQ) > 60) return;
-      rawQ = q;
-      if (!haveReading) { baseQ = rawQ; haveReading = true; }  // first reading = baseline
-    };
-    // Prefer 'absolute' (compass-referenced, stable yaw). Registering both
-    // but ignoring the relative one afterwards avoids the two alpha origins
-    // fighting each other (which would make yaw jump every frame).
-    window.addEventListener('deviceorientationabsolute', (e) => apply(e, true), true);
-    window.addEventListener('deviceorientation', (e) => apply(e, false), true);
-  }
-
-  let wakeLock = null;
-  async function requestWakeLock() {
-    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && settings.wake) requestWakeLock();
-  });
-
-  // ---------------- calibration ----------------
-  function calibrate() {
-    baseQ = rawQ;
-    smQ = { x: 0, y: 0, z: 0, w: 1 };
-    prevDelta = { x: 0, y: 0, z: 0, w: 1 };   // reset hemisphere tracking
-    holdQ = null;
-    xrBasePos = { x: xrLastPos.x, y: xrLastPos.y, z: xrLastPos.z };  // zero the dolly too
-    xrPos = { x: 0, y: 0, z: 0 };
-    if (navigator.vibrate) navigator.vibrate(15);
-    flash('recentered');
-  }
-
-  // ---------------- main loop ----------------
-  let lastSend = 0;
-  const SEND_MS = 1000 / 60;
-
-  // Shared per-frame motion step. Driven by the normal rAF loop for gyro, and
-  // by the XR frame loop while an AR session is active (window rAF pauses then).
-  function stepMotion(now) {
-    // delta orientation relative to the calibration pose, expressed in
-    // the calibrated (baseline-local) frame: delta = baseQ⁻¹ · rawQ
-    let delta = qMul(qConj(baseQ), rawQ);
-    delta = qScaleAngle(delta, settings.sensitivity, settings.deadzone);
-
-    if (mode === 'photo' && holdQ) {
-      smQ = holdQ;                                 // frozen frame
-    } else {
-      // heavier smoothing in slo-mo for that cinematic drift
-      const base = mode === 'slomo' ? Math.max(settings.smoothing, 0.6) : settings.smoothing;
-      const alpha = 1 - Math.pow(base, Math.max(0.001, (now - (stepMotion._t || now)) / 16.67));
-      smQ = qSlerp(smQ, delta, Math.max(0.02, Math.min(1, alpha)));
-    }
-    stepMotion._t = now;
-
-    updateHUD();
-
-    if (now - lastSend >= SEND_MS) { lastSend = now; sendPacket(); }
-  }
-
-  function tick(now) {
-    if (!xrActive) stepMotion(now);                // XR drives its own steps
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-
-  // ---------------- HUD ----------------
-  function updateHUD() {
-    const pry = qToPRY(smQ);
-    if (settings.attitude) {
-      // Artificial horizon: the line rolls and slides along its own (rolled)
-      // normal, while the centre pip stays pinned to the middle of the frame.
-      // Looking up puts the horizon below centre, so positive pitch => +Y.
-      const pit = Math.max(-60, Math.min(60, pry.pitch));
-      const line = el('roll-line');
-      line.style.transform =
-        `rotate(${pry.roll.toFixed(2)}deg) translateY(${(pit * 1.15).toFixed(1)}px)`;
-      // Fade out as the horizon leaves the frame, and hide it entirely where
-      // roll is undefined, a clamped, ambiguous line must not read as truth.
-      const vis = pry.horizon ? Math.max(0, Math.min(1, (60 - Math.abs(pry.pitch)) / 15)) : 0;
-      line.style.opacity = vis.toFixed(2);
-    }
-    if (performance.now() >= flashUntil) {
-      el('readout').innerHTML =
-        `P ${pry.pitch.toFixed(1)}°&nbsp;·&nbsp;R ${pry.roll.toFixed(1)}°&nbsp;·&nbsp;Y ${pry.yaw.toFixed(1)}°`;
-    }
-    if (engaged) {
-      const secs = Math.floor((Date.now() - recStart) / 1000);
-      const m = String(Math.floor(secs/60)).padStart(2,'0'), s = String(secs%60).padStart(2,'0');
-      el('rec-time').textContent = `${m}:${s}`;
-    }
-  }
-
-  // ---------------- networking ----------------
-  let reconnectTimer = null;
-  let reconnectDelay = 800;
-
-  function defaultUrl() {
-    // Connect to whoever served this page, but never paint the IP on screen
-    // (keeps the address private on a shared/streamed display).
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    const host = location.hostname || '';
-    return host ? `${scheme}://${host}:8787` : '';
-  }
-
-  // The bridge's certificate is self-signed. Until the browser has completed a
-  // plain HTTPS request to that origin it will refuse the wss:// handshake
-  // outright (no prompt), which is why the app used to come alive only once
-  // you pressed the live-feed button and it loaded an image over https. Doing
-  // that request ourselves means Connect and the record button just work.
-  let primed = false;
-  async function primeOrigin(url) {
-    if (primed) return true;
-    let origin;
-    try { origin = new URL(url.replace(/^ws/i, 'http')).origin; }
-    catch (_) { return false; }
-    try {
-      await fetch(origin + '/health', { cache: 'no-store', mode: 'cors' });
-      primed = true;
-      el('cert-help').hidden = true;
-      return true;
-    } catch (e) {
-      const link = el('cert-link');
-      if (link) link.href = origin + '/health';
-      el('cert-help').hidden = false;
-      setGateStatus('bridge unreachable, trust its certificate once');
-      setConn('down', 'no bridge');
-      return false;
-    }
-  }
-
-  // Single entry point used by Connect, the record button and reconnects.
-  async function ensureConnected(url) {
-    const target = url || wsUrl || defaultUrl();
-    if (!target) { setConn('down', 'no host'); return; }
-    if (ws && ws.readyState === WebSocket.OPEN && wsUrl === target) return;
-    wsUrl = target;
-    setConn('warn', 'connecting…');
-    await primeOrigin(target);        // connect anyway if priming failed
-    if (ws && ws.readyState === WebSocket.OPEN && wsUrl === target) return;
-    connect(target);
-  }
-
-  function normalizeUrl(input) {
-    let v = (input || '').trim();
-    if (!v) return '';
-    // accept a bare IP / "code" and build a wss URL
-    if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(v)) {
-      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-      if (!/:\d+$/.test(v)) v += ':8787';
-      return `${scheme}://${v}`;
-    }
-    if (/^https?:\/\//i.test(v)) return v.replace(/^http/i, 'ws');
-    if (/^wss?:\/\//i.test(v)) return v;
-    return v;
-  }
-
-  function connect(url) {
-    if (!url) return;
-    wsUrl = url;
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    // Tear the previous socket down WITHOUT letting its close handler fire a
-    // reconnect. Using property handlers (not addEventListener) means nulling
-    // them actually detaches, the old code set ws.onclose=null but the real
-    // listener was added with addEventListener, so it kept firing and each
-    // manual Connect kicked off an endless connect/disconnect loop.
-    if (ws) {
-      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
-      try { ws.close(); } catch (e) {}
-      ws = null;
-    }
-    setConn('warn', 'connecting…');
-    setGateStatus('connecting…');
-    let sock;
-    try { sock = new WebSocket(url); }
-    catch (e) { scheduleReconnect(); return; }
-    ws = sock;
-
-    sock.onopen = () => {
-      if (ws !== sock) return;                 // ignore sockets we've replaced
-      reconnectDelay = 800;
-      primed = true;
-      el('cert-help').hidden = true;
-      setConn('live', 'connected');
-      setGateStatus('<b>connected</b>: tap the record button to engage the camera');
-      el('shutter').classList.remove('pending');
-      if (pendingEngage) { pendingEngage = false; setEngaged(true); }
-    };
-    sock.onclose = () => {
-      if (ws !== sock) return;
-      setConn('down', 'disconnected');
-      scheduleReconnect();
-    };
-    sock.onerror = () => {
-      if (ws !== sock) return;
-      setConn('down', 'error');
-      primed = false;                          // re-prime the origin next attempt
-    };
-  }
-
-  function scheduleReconnect() {
-    if (reconnectTimer || !wsUrl) return;
-    setConn('warn', 'reconnecting…');
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      ensureConnected(wsUrl);
-    }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 1.6, 5000);
-  }
-
-  function setConn(s, text) {
-    const dot = el('conn-dot');
-    dot.classList.remove('live', 'warn', 'down');
-    if (s !== 'idle') dot.classList.add(s);
-    el('conn-text').textContent = text;
-    if (s !== 'live') el('conn-lat').textContent = '';
-  }
-
-  function sendPacket() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const q = qNorm(smQ);
-    // Axis inverts are applied here so they take effect end-to-end (they
-    // also double as the fix if the in-game axis mapping feels mirrored).
-    // Negating a quaternion's vector component reverses the rotation sense
-    // about that device axis, pitch=x, yaw=y, roll=z.
-    const qx = settings.invPitch ? -q.x : q.x;
-    const qy = settings.invYaw   ? -q.y : q.y;
-    const qz = settings.invRoll  ? -q.z : q.z;
-    const pkt = {
-      t: Date.now(),
-      qx: +qx.toFixed(5), qy: +qy.toFixed(5), qz: +qz.toFixed(5), qw: +q.w.toFixed(5),
-      active: engaged,
-      zoom: +zoomFactor.toFixed(4),    // factor; 1 = the game's own FOV, no override
-      mode: mode,
-      filter: filterId,                // viewfinder look, for the in-game readout
-    };
-    // 6DoF position (metres, car frame). Sent once AR has been used so the
-    // camera eases back to origin when AR stops (xrPos is zeroed then).
-    if (xrActive || xrEverUsed) {
-      pkt.px = +xrPos.x.toFixed(4);
-      pkt.py = +xrPos.y.toFixed(4);
-      pkt.pz = +xrPos.z.toFixed(4);
-    }
-    ws.send(JSON.stringify(pkt));
-  }
-
-  // ---------------- controls ----------------
-  // The record button doubles as Connect: if we're not paired yet it kicks off
-  // the connection and engages the camera as soon as the socket opens.
-  el('shutter').addEventListener('click', () => {
-    goFullscreen();
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      pendingEngage = true;
-      el('shutter').classList.add('pending');
-      flash('connecting…');
-      haptic(10);
-      ensureConnected();
-      return;
-    }
-    setEngaged(!engaged);
-  });
-  function setEngaged(v) {
-    engaged = v;
-    el('stage').classList.toggle('engaged', engaged);
-    if (engaged) { recStart = Date.now(); } else { el('rec-time').textContent = 'REC'; }
-    if (navigator.vibrate) navigator.vibrate(engaged ? [10, 40, 10] : 10);
-    sendPacket();
-  }
-
-  document.querySelectorAll('#modes .mode').forEach((b) => {
-    b.addEventListener('click', () => {
-      document.querySelectorAll('#modes .mode').forEach((x) => x.classList.remove('sel'));
-      b.classList.add('sel');
-      mode = b.dataset.mode;
-      holdQ = (mode === 'photo') ? smQ : null;    // freeze current framing
-      if (navigator.vibrate) navigator.vibrate(8);
-      flash(mode.toUpperCase());
-    });
-  });
-
-  // ---------------- zoom wheel ----------------
-  // A ruler of ticks wrapped on a big circle, rotating under a fixed needle:
-  // whatever sits under the needle is the zoom. Dragging is 1:1 with the ruler
-  // (a pixel of finger travel turns the wheel by exactly that arc length), so
-  // it feels like turning a physical lens ring, and every tick crossing fires a
-  // haptic tap with a firmer one on the 1.0× detent.
-  const ZW = { vbW: 400, vbH: 104, cx: 200, x0: 20, x1: 380, apexY: 32, endY: 74 };
-  ZW.r = (((ZW.x1 - ZW.x0) / 2) ** 2 + (ZW.endY - ZW.apexY) ** 2) / (2 * (ZW.endY - ZW.apexY));
-  ZW.cy = ZW.apexY + ZW.r;
-  const ZW_SPAN_DEG = 104;                    // whole 0.5×…15× range across the wheel
-  const ZW_SPAN_RAD = ZW_SPAN_DEG * RAD;
-  const ZW_LABELS = [0.5, 0.7, 1, 1.5, 2, 3, 4, 6, 8, 11, 15];
-  const ZW_SUBDIV = 4;                        // minor ticks between labels
-
-  const pFromZoom = (z) => (Math.log(z) - Z_LN0) / Z_LNSPAN;
-  const zoomFromP = (p) => Math.exp(Z_LN0 + p * Z_LNSPAN);
-  const P_UNITY = pFromZoom(1);
-  const clamp01 = (v) => Math.max(0, Math.min(1, v));
-  // angle of a ruler position, measured from the needle (wheel at 1× centred)
-  const angleOfP = (p) => (p - P_UNITY) * ZW_SPAN_DEG;
-  const onWheel = (angleDeg, rad) => {
-    const a = angleDeg * RAD;
-    return { x: ZW.cx + rad * Math.sin(a), y: ZW.cy - rad * Math.cos(a) };
-  };
-
-  const fmtZoom = (z) => (z < 9.95 ? z.toFixed(1) : Math.round(z).toString());
-
-  // every tick position, in ruler space, so drag detents line up with what's drawn
-  const zwTicks = (() => {
-    const out = [];
-    for (let i = 0; i < ZW_LABELS.length; i++) {
-      const z = ZW_LABELS[i];
-      out.push({ p: pFromZoom(z), major: true, label: z === 1 ? '1×' : fmtZoom(z).replace(/\.0$/, ''), unity: z === 1 });
-      if (i < ZW_LABELS.length - 1) {
-        const p0 = pFromZoom(z), p1 = pFromZoom(ZW_LABELS[i + 1]);
-        for (let k = 1; k < ZW_SUBDIV; k++) out.push({ p: p0 + (p1 - p0) * k / ZW_SUBDIV, major: false });
-      }
-    }
-    return out.sort((a, b) => a.p - b.p);
-  })();
-
-  function nearestTickIndex(p) {
-    let best = 0, bestD = Infinity;
-    for (let i = 0; i < zwTicks.length; i++) {
-      const d = Math.abs(zwTicks[i].p - p);
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    return best;
-  }
-
-  function haptic(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (_) {} }
-
-  function updateZoomWheel() {
-    const p = pFromZoom(zoomFactor);
-    el('zd-wheel').setAttribute('transform',
-      `rotate(${(-angleOfP(p)).toFixed(3)} ${ZW.cx} ${ZW.cy})`);
-    const v = el('zd-value');
-    v.textContent = fmtZoom(zoomFactor) + '×';
-    v.classList.toggle('neutral', zoomFactor === 1);
-    // camera-style focal length readout: 1.0× is a 24 mm equivalent
-    el('zd-mm').textContent = Math.round(24 * zoomFactor) + ' MM';
-  }
-
-  function setZoom(z, opts) {
-    const snap = !opts || opts.snap !== false;
-    let p = clamp01(pFromZoom(Math.max(Z_MIN, Math.min(Z_MAX, z))));
-    if (snap && Math.abs(p - P_UNITY) < 0.014) { p = P_UNITY; z = 1; }
-    else z = zoomFromP(p);
-    if (Math.abs(p - P_UNITY) < 1e-9) z = 1;         // exactly neutral -> no override
-    zoomFactor = z;
-    updateZoomWheel();
-    sendPacket();
-    return p;
-  }
-
-  (function setupZoomWheel() {
-    const svg = el('zoomdial-svg');
-    const wheel = el('zd-wheel'), SVG_NS = 'http://www.w3.org/2000/svg';
-
-    for (const t of zwTicks) {
-      const a = angleOfP(t.p);
-      const len = t.major ? 15 : 9;
-      const inner = onWheel(a, ZW.r - len), outer = onWheel(a, ZW.r);
-      const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('x1', inner.x.toFixed(2)); line.setAttribute('y1', inner.y.toFixed(2));
-      line.setAttribute('x2', outer.x.toFixed(2)); line.setAttribute('y2', outer.y.toFixed(2));
-      if (t.unity) line.setAttribute('class', 'unity');
-      else if (t.major) line.setAttribute('class', 'major');
-      wheel.appendChild(line);
-      if (t.label) {
-        const at = onWheel(a, ZW.r + 15);
-        const text = document.createElementNS(SVG_NS, 'text');
-        text.setAttribute('x', at.x.toFixed(2)); text.setAttribute('y', at.y.toFixed(2));
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('transform', `rotate(${a.toFixed(2)} ${at.x.toFixed(2)} ${at.y.toFixed(2)})`);
-        if (t.unity) text.setAttribute('class', 'unity');
-        text.textContent = t.label;
-        wheel.appendChild(text);
-      }
-    }
-
-    let dragging = false, lastX = 0, moved = 0, lastTick = -1, lastTap = 0;
-    // viewBox radius -> CSS pixels, so a pixel of drag is a pixel of ruler
-    const cssRadius = () => {
-      const w = svg.getBoundingClientRect().width || ZW.vbW;
-      return ZW.r * (w / ZW.vbW);
-    };
-
-    const down = (e) => {
-      dragging = true; moved = 0; lastX = e.clientX;
-      lastTick = nearestTickIndex(pFromZoom(zoomFactor));
-      svg.classList.add('active');
-      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
-      e.preventDefault();
-    };
-    const move = (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      lastX = e.clientX;
-      moved += Math.abs(dx);
-      // drag right -> the ruler slides right -> smaller numbers reach the needle
-      const p = clamp01(pFromZoom(zoomFactor) - (dx / cssRadius()) / ZW_SPAN_RAD);
-      setZoom(zoomFromP(p));
-      const idx = nearestTickIndex(pFromZoom(zoomFactor));
-      if (idx !== lastTick) {
-        lastTick = idx;
-        haptic(zoomFactor === 1 ? 18 : 4);
-      }
-      e.preventDefault();
-    };
-    const up = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      svg.classList.remove('active');
-      try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
-      const now = performance.now();
-      if (moved < 6) {                      // a tap, not a drag
-        if (now - lastTap < 320) { setZoom(1); haptic(18); flash('1.0× · reset'); }
-        lastTap = now;
-      }
-      sendPacket();
-    };
-
-    svg.addEventListener('pointerdown', down);
-    svg.addEventListener('pointermove', move);
-    svg.addEventListener('pointerup', up);
-    svg.addEventListener('pointercancel', up);
-    svg.addEventListener('lostpointercapture', up);
-    // belt and braces for browsers that don't deliver pointer events here
-    svg.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-    updateZoomWheel();
-  })();
-
-  // ---------------- 90s filters ----------------
-  // The looks themselves live in CSS (one class per filter) so the compositor
-  // does the work; this just picks one, drives the camcorder OSD clock, and
-  // builds the picker. Every chip renders the same still through the real
-  // filter, so what you tap is what you get.
-  const FILTERS = [
-    { id: 'off',  name: 'NONE' },
-    { id: 'vhs',  name: 'VHS',        osd: 'camcorder' },
-    { id: 'vhsc', name: "CAMCORDER'92", osd: 'camcorder' },
-    { id: 'hi8',  name: 'Hi8' },
-    { id: 'beta', name: "BROADCAST'95" },
-    { id: 's8',   name: 'SUPER 8' },
-    { id: 'noir', name: 'SECURITY',   osd: 'security' },
-    { id: 'neon', name: "NEON'89" },
-  ];
-  const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-  let filterId = 'off';
-  let osdMode = null;
-
-  function setFilter(id, opts) {
-    const f = FILTERS.find((x) => x.id === id) || FILTERS[0];
-    const stage = el('stage');
-    FILTERS.forEach((x) => stage.classList.remove('f-' + x.id));
-    if (f.id !== 'off') stage.classList.add('f-' + f.id);
-    filterId = f.id;
-    osdMode = f.osd || null;
-    stage.classList.toggle('osd-on', !!osdMode);
-    updateOsd();
-    document.querySelectorAll('#filter-strip .fchip').forEach((b) =>
-      b.classList.toggle('sel', b.dataset.f === f.id));
-    try { localStorage.setItem('hc.filter', f.id); } catch (_) {}
-    if (!opts || !opts.silent) { haptic(10); flash(f.name); }
-    sendPacket();
-  }
-
-  const p2 = (n) => String(n).padStart(2, '0');
-  function updateOsd() {
-    if (!osdMode) return;
-    const d = new Date();
-    const time = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
-    el('osd-text').textContent = osdMode === 'security'
-      ? `CAM 01  ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}  ${time}`
-      : `${MONTHS[d.getMonth()]} ${p2(d.getDate())} ${d.getFullYear()}  ${time}`;
-  }
-  setInterval(updateOsd, 500);
-
-  (function buildFilterStrip() {
-    const strip = el('filter-strip');
-    for (const f of FILTERS) {
-      const chip = document.createElement('button');
-      chip.className = 'fchip';
-      chip.dataset.f = f.id;
-      const thumb = document.createElement('span');
-      thumb.className = 'fthumb t-' + f.id;
-      thumb.appendChild(document.createElement('i'));
-      const label = document.createElement('span');
-      label.className = 'flabel';
-      label.textContent = f.name;
-      chip.append(thumb, label);
-      chip.addEventListener('click', () => setFilter(f.id));
-      strip.appendChild(chip);
-    }
-    let saved = null;
-    try { saved = localStorage.getItem('hc.filter'); } catch (_) {}
-    setFilter(saved && FILTERS.some((x) => x.id === saved) ? saved : 'off', { silent: true });
-  })();
-
-  el('filter-btn').addEventListener('click', () => {
-    const on = el('stage').classList.toggle('filters-on');
-    el('filter-btn').classList.toggle('on', on);
-    haptic(8);
-  });
-
-  el('recenter-btn').addEventListener('click', calibrate);
-  el('calibrate-full').addEventListener('click', calibrate);
-
-  // Viewfinder still behind the HUD when the feed is off, only swapped in if
-  // it actually loads, so a missing asset just leaves the plain gradient.
-  (function loadStill() {
-    const probe = new Image();
-    probe.onload = () => el('backdrop').classList.add('has-still');
-    probe.src = '/preview.jpg';
-  })();
-
-  // live game feed (MJPEG from bridge /feed)
-  let feedOn = false;
-  el('feed-btn').addEventListener('click', () => {
-    feedOn = !feedOn;
-    el('feed-btn').classList.toggle('on', feedOn);
-    el('stage').classList.toggle('feed-on', feedOn);
-    el('feed').src = feedOn ? `/feed?${Date.now()}` : '';
-  });
-  el('feed').addEventListener('error', () => {
-    if (feedOn) flash('feed unavailable');
-  });
-
-  // grid quick-toggle
-  el('grid-btn').addEventListener('click', () => {
-    settings.grid = !settings.grid;
-    el('grid-btn').classList.toggle('on', settings.grid);
-    setSwitch('tg-grid', settings.grid);
-    applyDisplayToggles();
-  });
-
-  // ---------------- settings sheet ----------------
-  function openSheet(v) {
-    el('sheet').classList.toggle('open', v);
-    el('sheet-scrim').classList.toggle('open', v);
-  }
-  el('settings-btn').addEventListener('click', () => openSheet(true));
-  el('sheet-scrim').addEventListener('click', () => openSheet(false));
-
-  el('connect-btn').addEventListener('click', () => {
-    manualConnect = true;
-    const raw = el('server-url').value;
-    const url = raw ? normalizeUrl(raw) : (wsUrl || defaultUrl());   // blank = reconnect
-    if (!url) return;
-    // already connected here? don't tear it down and reconnect for nothing.
-    if (ws && ws.readyState === WebSocket.OPEN && wsUrl === url) { openSheet(false); return; }
-    if (raw) primed = false;                 // different origin: prime that one
-    reconnectDelay = 800;
-    ensureConnected(url);
-    openSheet(false);
-  });
-  el('gate-connect').addEventListener('click', () => {
-    const url = normalizeUrl(el('gate-code').value);
-    if (!url) return;
-    manualConnect = true; primed = false; reconnectDelay = 800;
-    startEverything(url);                    // typing a code also starts the app
-  });
-  el('gate-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('gate-connect').click(); });
-
-  function bindSlider(id, valId, key, fmt) {
-    const input = el(id);
-    input.addEventListener('input', () => {
-      settings[key] = parseFloat(input.value);
-      el(valId).textContent = fmt ? fmt(settings[key]) : settings[key].toFixed(2);
-    });
-  }
-  bindSlider('sens', 'sens-val', 'sensitivity');
-  bindSlider('smooth', 'smooth-val', 'smoothing');
-  bindSlider('dead', 'dead-val', 'deadzone', (v) => v.toFixed(2) + '°');
-
-  function bindSwitch(id, key, onChange) {
-    const sw = el(id);
-    sw.addEventListener('click', () => {
-      settings[key] = !settings[key];
-      setSwitch(id, settings[key]);
-      if (onChange) onChange();
-    });
-  }
-  function setSwitch(id, on) { el(id).classList.toggle('on', on); }
-  bindSwitch('inv-pitch', 'invPitch');   // applied to the outgoing quaternion in sendPacket()
-  bindSwitch('inv-yaw', 'invYaw');
-  bindSwitch('inv-roll', 'invRoll');
-  bindSwitch('tg-grid', 'grid', applyDisplayToggles);
-  bindSwitch('tg-attitude', 'attitude', applyDisplayToggles);
-  bindSwitch('tg-wake', 'wake', () => { if (settings.wake) requestWakeLock(); });
-  bindSwitch('tg-fs', 'fullscreen', () => { if (settings.fullscreen) goFullscreen(); else exitFullscreen(); });
-
-  function applyDisplayToggles() {
-    el('stage').classList.toggle('no-grid', !settings.grid);
-    el('grid-btn').classList.toggle('on', settings.grid);
-    el('attitude').style.display = settings.attitude ? 'block' : 'none';
-  }
-
-  // sync every control to the default settings on load (so e.g. the inverted
-  // pitch/roll switches actually show as "on")
-  function syncControlsFromSettings() {
-    el('sens').value = settings.sensitivity;   el('sens-val').textContent = settings.sensitivity.toFixed(2);
-    el('smooth').value = settings.smoothing;    el('smooth-val').textContent = settings.smoothing.toFixed(2);
-    el('dead').value = settings.deadzone;       el('dead-val').textContent = settings.deadzone.toFixed(2) + '°';
-    setSwitch('inv-pitch', settings.invPitch);
-    setSwitch('inv-yaw', settings.invYaw);
-    setSwitch('inv-roll', settings.invRoll);
-    setSwitch('tg-grid', settings.grid);
-    setSwitch('tg-attitude', settings.attitude);
-    setSwitch('tg-wake', settings.wake);
-    setSwitch('tg-fs', settings.fullscreen);
-    updateZoomWheel();
-  }
-  syncControlsFromSettings();
-
-  // ---------------- WebXR 6DoF (AR) movement ----------------
-  // Uses the phone's own AR tracking (ARCore) for true position + orientation,
-  // so physically stepping/leaning dollies the in-game camera and the near-
-  // upright gimbal flip of the gyro path disappears. Android Chrome only;
-  // iOS Safari has no WebXR AR, so the gyro path stays the default there.
-  async function detectXR() {
-    const btn = el('ar-btn');
-    if (!('xr' in navigator)) { btn.disabled = true; el('ar-note').textContent =
-      "This phone/browser has no WebXR AR. The gyro control still works, iPhones use it (Safari lacks WebXR)."; return; }
-    try {
-      const ok = await navigator.xr.isSessionSupported('immersive-ar');
-      if (!ok) { btn.disabled = true; el('ar-note').textContent =
-        'AR not available here. Gyro control still works.'; }
-    } catch (e) { btn.disabled = true; }
-  }
-
-  async function startXR() {
-    if (xrActive || !('xr' in navigator)) return;
-    try {
-      const session = await navigator.xr.requestSession('immersive-ar', {
-        requiredFeatures: [],
-        optionalFeatures: ['local-floor', 'dom-overlay'],
-        domOverlay: { root: document.body },
-      });
-      xrSession = session;
-      try { xrRefSpace = await session.requestReferenceSpace('local'); }
-      catch (e) { xrRefSpace = await session.requestReferenceSpace('viewer'); }
-      xrActive = true;
-      xrEverUsed = true;
-      let calibrated = false;
-      el('ar-btn').textContent = 'Stop AR movement';
-      el('stage').classList.add('xr-on');
-      flash('AR movement on, recenter to set home');
-
-      const onXRFrame = (t, frame) => {
-        if (!xrActive) return;
-        session.requestAnimationFrame(onXRFrame);
-        const pose = frame.getViewerPose(xrRefSpace);
-        if (!pose) return;
-        const o = pose.transform.orientation, p = pose.transform.position;
-        rawQ = { x: o.x, y: o.y, z: o.z, w: o.w };
-        xrLastPos = { x: p.x, y: p.y, z: p.z };
-        if (!calibrated) { baseQ = rawQ; xrBasePos = { ...xrLastPos }; haveReading = true; calibrated = true; }
-        // world displacement -> phone-local (calibration) frame -> car frame
-        const world = { x: p.x - xrBasePos.x, y: p.y - xrBasePos.y, z: p.z - xrBasePos.z };
-        const local = qRotateVec(qConj(baseQ), world);
-        xrPos = { x: local.x, y: local.y, z: -local.z };   // +z forward (camera looks down -z)
-        stepMotion(t);
-      };
-      session.requestAnimationFrame(onXRFrame);
-      session.addEventListener('end', () => {
-        xrActive = false; xrSession = null; xrRefSpace = null;
-        xrPos = { x: 0, y: 0, z: 0 };                       // ease camera back home
-        haveReading = false;                                // re-baseline gyro on next reading (no jump)
-        el('ar-btn').textContent = 'Start AR 6DoF movement';
-        el('stage').classList.remove('xr-on');
-        flash('AR movement off');
-      });
-    } catch (e) {
-      flash('AR could not start');
-      el('ar-note').textContent = 'AR failed to start: ' + (e && e.message ? e.message : e);
-    }
-  }
-
-  function stopXR() { if (xrSession) { try { xrSession.end(); } catch (e) {} } }
-
-  el('ar-btn').addEventListener('click', () => { if (xrActive) stopXR(); else startXR(); });
-  detectXR();
-
-  // ---------------- transient toast ----------------
-  // updateHUD() leaves the readout alone until flashUntil passes, so the
-  // message is actually visible instead of being overwritten next frame.
-  let flashUntil = 0;
-  function flash(msg) {
-    el('readout').textContent = msg;
-    flashUntil = performance.now() + 900;
-  }
-
-  // if page was opened directly (not through gate) e.g. returning user,
-  // the gate still shows so motion permission can be (re)granted.
-})();
-</script>
+<script src="/motion.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

@@ -42,7 +42,7 @@ if errorlevel 1 (
 
 echo.
 echo [OK] USB link is up.
-echo     1. Make sure the bridge is running:  npm start
+echo     1. Make sure the bridge is running ^(Start Handheld Cam.bat^)
 echo     2. On the phone, open:  https://localhost:8787
 echo.
 echo (Leave the phone plugged in. Rerun this if you unplug/replug.)
