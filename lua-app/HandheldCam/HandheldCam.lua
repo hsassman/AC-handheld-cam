@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.0'
+local VERSION = '0.3.1'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -63,7 +63,10 @@ end
 -- Render-delay interpolation: we play the phone's motion back a few ms behind
 -- realtime and interpolate between samples, so network jitter and the gap
 -- between 60 Hz packets and the game's higher frame rate can't cause stutter.
-local RENDER_DELAY = 70   -- ms
+-- The delay itself is adaptive (see jitterEwma below): a clean LAN link earns
+-- a tighter, more responsive buffer, a jittery one gets more slack.
+local RENDER_DELAY_MIN = 30   -- ms, floor even on a perfect link
+local RENDER_DELAY_MAX = 150  -- ms, ceiling so a bad link still bounds the lag
 local MAX_SAMPLES  = 24
 local WALK_LIMIT   = 500  -- metres; keeps a runaway thumbstick from losing the camera
 local STATUS_EVERY = 150  -- ms between status datagrams back to the bridge
@@ -99,6 +102,9 @@ local state = {
 
   samples = {},          -- ring buffer of {t,x,y,z,w} for interpolation
   clockOffset = nil,     -- local ms minus phone ms, tracked on its low edge
+  lastArrival = -1e9,    -- sim.time of the previous packet, for jitter tracking
+  jitterEwma = 20,       -- running estimate of packet-timing jitter (ms)
+  renderDelay = 70,      -- current adaptive render delay (ms), eased each packet
 
   zoom = 1.0,            -- zoom factor from the phone (1 = the camera's own FOV)
   zoomSm = 1.0,          -- eased zoom actually applied
@@ -205,8 +211,26 @@ local function localSampleTime(pkt)
   return pkt.t + off
 end
 
+-- The phone sends roughly every 14 ms; how far actual arrivals stray from
+-- that (an EWMA, so one bad beat doesn't swing it) sets how much safety
+-- margin the render delay needs. Only fed from gaps that look like normal
+-- jitter, not a reconnect or a stall, so a stutter doesn't inflate the
+-- estimate right when it's least representative.
+local EXPECTED_INTERVAL = 14  -- ms, matches the phone's SEND_MIN_MS
+local function trackJitter()
+  local now = sim.time
+  local gap = now - state.lastArrival
+  state.lastArrival = now
+  if gap > 0 and gap < 200 then
+    local dev = math.abs(gap - EXPECTED_INTERVAL)
+    state.jitterEwma = state.jitterEwma + (dev - state.jitterEwma) * 0.05
+  end
+  state.renderDelay = math.max(RENDER_DELAY_MIN, math.min(RENDER_DELAY_MAX, 20 + state.jitterEwma * 3))
+end
+
 local function handlePacket(pkt)
   state.packetsReceived = state.packetsReceived + 1
+  trackJitter()
 
   -- normalise and buffer the orientation for interpolation
   local nx, ny, nz, nw = pkt.qx, pkt.qy, pkt.qz, pkt.qw
@@ -309,7 +333,7 @@ local function pollNetwork()
 end
 
 -- ============================================================
--- Smoothing: interpolate the buffered samples at (now - RENDER_DELAY),
+-- Smoothing: interpolate the buffered samples at (now - state.renderDelay),
 -- then apply a light frame-rate-independent slerp on top.
 -- ============================================================
 local function interpolatedTarget(renderTime)
@@ -332,7 +356,7 @@ local function interpolatedTarget(renderTime)
 end
 
 local function updateSmoothing(dt)
-  local target = interpolatedTarget(sim.time - RENDER_DELAY)
+  local target = interpolatedTarget(sim.time - state.renderDelay)
   local current = quat(state.sx, state.sy, state.sz, state.sw)
   local alpha = 1.0 - math.pow(config.extraSmooth, dt * 60)
   alpha = math.max(0.0, math.min(1.0, alpha))
@@ -1062,7 +1086,7 @@ local function drawStatusTab()
   row('Phone', state.connected and 'streaming' or 'no data', state.connected and COL_OK or COL_WARN)
   row('Packets', tostring(state.packetsReceived))
   if state.clockOffset and state.connected then
-    row('Buffer', string.format('%d ms render delay', RENDER_DELAY))
+    row('Buffer', string.format('%d ms render delay (adaptive, jitter %.0f ms)', state.renderDelay, state.jitterEwma))
   end
   if state.socketError then ui.textColored('Socket error: ' .. state.socketError, COL_BAD) end
   if state.lastRecvError then ui.textColored('Recv: ' .. state.lastRecvError, COL_WARN) end

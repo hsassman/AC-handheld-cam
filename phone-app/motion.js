@@ -213,8 +213,13 @@
     function tryGenericSensor() {
       if (typeof global.RelativeOrientationSensor !== 'function') return false;
       let sensor, ok = false;
+      // Ask for the fastest rate a phone's IMU will actually give us; the
+      // browser clamps to whatever it supports (commonly 60-200 Hz), so
+      // asking high only helps on hardware that can go faster and is free
+      // on hardware that can't. More samples per delta = less aliasing on
+      // a fast flick and a smaller round trip before the game sees it.
       try {
-        sensor = new global.RelativeOrientationSensor({ frequency: 60, referenceFrame: 'screen' });
+        sensor = new global.RelativeOrientationSensor({ frequency: 200, referenceFrame: 'screen' });
       } catch (e) { return false; }
       sensor.addEventListener('reading', () => {
         const a = sensor.quaternion;

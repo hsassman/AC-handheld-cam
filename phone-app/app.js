@@ -8,7 +8,7 @@
   const RAD = M.RAD;
   const el = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
 
   // ---------------- settings (remembered on this phone) ----------------
   const DEFAULTS = {
