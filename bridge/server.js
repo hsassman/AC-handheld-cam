@@ -143,11 +143,12 @@ const FEED_MIN_INTERVAL = Math.round(1000 / FEED_MAX_FPS);
 let Monitor = null;
 try { ({ Monitor } = require('node-screenshots')); }
 catch (e) { console.error('[!] Screen capture unavailable, the live feed is disabled:', e.message); }
-let latestFrame = null;
-let latestSeq = 0;
-let feedViewers = 0;
 let capturing = false;
 let monitor = null;
+// Viewers are pushed a frame the instant it's captured, instead of each
+// running its own poll timer: no idle wakeups between frames, and no up-to
+// one-poll-interval delay after a frame is ready.
+const feedViewers = new Set();
 
 function getMonitor() {
   if (monitor || !Monitor) return monitor;
@@ -156,15 +157,24 @@ function getMonitor() {
   return monitor;
 }
 
+function pushFrame(frame) {
+  const head = Buffer.from(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+  const chunk = Buffer.concat([head, frame, Buffer.from('\r\n')]);
+  for (const res of feedViewers) {
+    if (res.destroyed || res.writableEnded) { feedViewers.delete(res); continue; }
+    if (res.writableLength > frame.length * 2) continue; // slow phone: skip, don't queue
+    try { res.write(chunk); } catch (err) { feedViewers.delete(res); } // phone dropped off mid-write
+  }
+}
+
 async function captureLoop() {
-  if (feedViewers === 0) { capturing = false; latestFrame = null; return; }
+  if (feedViewers.size === 0) { capturing = false; return; }
   const t0 = Date.now();
   try {
     const m = getMonitor();
     if (m) {
       const img = await m.captureImage();
-      latestFrame = await img.toJpeg();
-      latestSeq++;
+      pushFrame(await img.toJpeg());
     }
   } catch (err) {
     monitor = null; // re-resolve the monitor list next tick
@@ -184,29 +194,9 @@ function serveFeed(req, res) {
     'Cache-Control': 'no-cache, no-store, must-revalidate',
     Pragma: 'no-cache', Connection: 'close',
   });
-  feedViewers++;
+  feedViewers.add(res);
   startCapture();
-  let lastSent = -1;
-  let done = false;
-  const stop = () => {
-    if (done) return;
-    done = true;
-    clearInterval(pump);
-    feedViewers = Math.max(0, feedViewers - 1);
-  };
-  const pump = setInterval(() => {
-    if (done || res.destroyed || res.writableEnded) { stop(); return; }
-    if (!latestFrame || latestSeq === lastSent) return;   // only push new frames
-    if (res.writableLength > latestFrame.length * 2) return; // slow phone: skip, don't queue
-    lastSent = latestSeq;
-    try {
-      res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${latestFrame.length}\r\n\r\n`);
-      res.write(latestFrame);
-      res.write('\r\n');
-    } catch (err) {
-      stop(); // phone dropped off mid-write
-    }
-  }, 12);
+  const stop = () => { feedViewers.delete(res); };
   req.on('close', stop);
   req.on('error', stop);
   res.on('close', stop);
