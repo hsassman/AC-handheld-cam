@@ -8,7 +8,7 @@
   const RAD = M.RAD;
   const el = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const VERSION = '0.3.2';
+  const VERSION = '0.3.3';
 
   // ---------------- settings (remembered on this phone) ----------------
   const DEFAULTS = {
@@ -665,7 +665,7 @@
     const m = Math.hypot(nx, ny);
     if (m < STICK_DEAD) { nx = 0; ny = 0; }
     else {
-      const curve = Math.pow((m - STICK_DEAD) / (1 - STICK_DEAD), 1.5) / m;  // fine control near centre
+      const curve = Math.pow((m - STICK_DEAD) / (1 - STICK_DEAD), 1.25) / m;  // fine control near centre, without feeling numb
       nx *= curve; ny *= curve;
     }
     const wasFull = Math.hypot(stickVec.x, stickVec.y) >= settings.walkSpeed * 0.98;

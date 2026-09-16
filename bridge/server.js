@@ -137,8 +137,10 @@ setInterval(() => {
 // --- desktop capture, re-served to the phone as an MJPEG "game feed" ---
 // Only runs while a phone is actually viewing /feed. Captures back-to-back,
 // capped at FEED_MAX_FPS, and pushes each viewer a frame as soon as it's
-// ready. Lower it if screen capture stutters the game.
-const FEED_MAX_FPS = 15;
+// ready (push delivery, so the cap is the only thing pacing it - no polling
+// delay on top). Override with HC_FEED_FPS=<n> if screen capture stutters
+// the game (lower it) or your rig can spare more GPU/CPU for it (raise it).
+const FEED_MAX_FPS = Math.max(1, Math.min(60, parseInt(process.env.HC_FEED_FPS, 10) || 30));
 const FEED_MIN_INTERVAL = Math.round(1000 / FEED_MAX_FPS);
 let Monitor = null;
 try { ({ Monitor } = require('node-screenshots')); }

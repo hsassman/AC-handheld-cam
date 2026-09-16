@@ -157,9 +157,10 @@ thumbstick instead.
 ## Live feed
 
 The bridge captures the desktop and re-serves it as MJPEG, only while a
-phone is actually viewing it. Screen capture competes with the game for the
-GPU, so if you see stutter while driving, turn the feed off or lower
-`FEED_MAX_FPS` in `bridge/server.js`.
+phone is actually viewing it, at up to 30 fps by default. Screen capture
+competes with the game for the GPU, so if you see stutter while driving,
+turn the feed off or start the bridge with `set HC_FEED_FPS=15` (or lower)
+first; raise it the same way if your rig can spare more GPU for it.
 
 ## Certificates
 
@@ -180,8 +181,8 @@ They live in `bridge/certs/` and are gitignored.
   addresses it found. Start it with `set HC_IP=192.168.x.x` first to choose.
 - **"Port 8787 is already in use":** the bridge is already running in another
   window.
-- **Feed is choppy:** lower `FEED_MAX_FPS` in `bridge/server.js`, or turn the
-  feed off while driving.
+- **Feed is choppy:** start the bridge with `set HC_FEED_FPS=15` (or lower)
+  first, or turn the feed off while driving.
 
 ## Requirements
 

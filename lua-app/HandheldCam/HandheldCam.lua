@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.2'
+local VERSION = '0.3.3'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -376,9 +376,11 @@ local function updateSmoothing(dt)
   if math.abs(lz - lt) < 5e-4 then lz = lt end
   state.zoomSm = math.exp(lz)
 
-  -- thumbstick: a short ease on the velocity so starts/stops feel like a
-  -- person walking rather than a robot dolly (~0.15 s to full speed)
-  local va = 1.0 - math.exp(-dt / 0.15)
+  -- thumbstick: a short ease on the velocity so starts/stops don't snap like
+  -- a robot dolly while still tracking the finger closely (~0.08 s to full
+  -- speed - quick enough that the stick reads as directly connected to the
+  -- camera rather than lagging behind it)
+  local va = 1.0 - math.exp(-dt / 0.08)
   state.vx = state.vx + (state.mvx - state.vx) * va
   state.vy = state.vy + (state.mvy - state.vy) * va
   if math.abs(state.vx) < 1e-3 and state.mvx == 0 then state.vx = 0 end
