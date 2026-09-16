@@ -68,6 +68,10 @@ Chrome's install prompt) so it runs full-screen with no address bar.
 - **Recenter:** zeroes the current pose as "facing forward" and brings a
   walked camera home.
 - **Feed button:** toggles a live view of the game behind the HUD.
+- **Save button:** saves a photo of the live feed to the phone (share sheet
+  on iOS, straight to Downloads on Android). Needs the live feed on, since
+  that's the only real camera pixels on screen; the rest of the viewfinder
+  is HUD chrome.
 - **Grid / looks buttons:** rule-of-thirds grid, and a picker of period
   camera looks (VHS, Camcorder '92, Hi8, Broadcast '95, Super 8, Security,
   Neon '89). These change how the viewfinder looks, not what the game

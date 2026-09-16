@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.3'
+local VERSION = '0.3.4'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)

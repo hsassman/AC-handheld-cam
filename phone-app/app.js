@@ -8,7 +8,7 @@
   const RAD = M.RAD;
   const el = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const VERSION = '0.3.3';
+  const VERSION = '0.3.4';
 
   // ---------------- settings (remembered on this phone) ----------------
   const DEFAULTS = {
@@ -1046,6 +1046,58 @@
   el('feed').addEventListener('error', () => {
     if (feedOn) toast('FEED UNAVAILABLE');
   });
+
+  // Save a still of the live feed to the phone. The feed is the only thing on
+  // screen that's actual camera pixels (the rest of the viewfinder is CSS/SVG
+  // chrome), so a photo needs it on and at least one frame in.
+  function saveFrame() {
+    const feedImg = el('feed');
+    if (!feedOn) {
+      el('feed-btn').click();
+      toast('LIVE FEED ON · TAP SAVE AGAIN', 1800);
+      return;
+    }
+    if (!feedImg.naturalWidth) { toast('FEED NOT READY YET'); return; }
+    let canvas, blob;
+    try {
+      canvas = document.createElement('canvas');
+      canvas.width = feedImg.naturalWidth;
+      canvas.height = feedImg.naturalHeight;
+      canvas.getContext('2d').drawImage(feedImg, 0, 0);
+    } catch (e) { toast('SAVE FAILED'); return; }
+    canvas.toBlob((b) => {
+      blob = b;
+      if (!blob) { toast('SAVE FAILED'); return; }
+      deliverPhoto(blob);
+    }, 'image/jpeg', 0.92);
+  }
+
+  // Prefer the native share sheet (iOS Safari and Android Chrome both offer
+  // "Save Image" / "Save to Photos" from it); fall back to a plain download,
+  // which Android saves straight to Downloads. Either way the browser, not
+  // this page, owns where the file ends up.
+  async function deliverPhoto(blob) {
+    const name = `handheldcam-${Date.now()}.jpg`;
+    const file = (() => { try { return new File([blob], name, { type: 'image/jpeg' }); } catch (_) { return null; } })();
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        haptic([6, 30, 6]);
+        toast('SHARE TO SAVE…', 1300);
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;   // user dismissed the sheet, not an error
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    haptic([6, 30, 6]);
+    toast('SAVED', 1300);
+  }
+  el('save-btn').addEventListener('click', saveFrame);
 
   el('grid-btn').addEventListener('click', () => {
     settings.grid = !settings.grid;
