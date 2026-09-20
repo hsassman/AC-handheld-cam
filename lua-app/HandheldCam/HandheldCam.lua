@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.4'
+local VERSION = '0.3.5'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -237,16 +237,20 @@ local function handlePacket(pkt)
   local n = math.sqrt(nx*nx + ny*ny + nz*nz + nw*nw)
   if n < 1e-8 then nx, ny, nz, nw = 0, 0, 0, 1 else nx, ny, nz, nw = nx/n, ny/n, nz/n, nw/n end
   state.qx, state.qy, state.qz, state.qw = nx, ny, nz, nw
-  local buf = state.samples
-  local t = localSampleTime(pkt)
-  if #buf > 0 and t <= buf[#buf].t then t = buf[#buf].t + 0.5 end -- stay strictly increasing
-  buf[#buf + 1] = { t = t, x = nx, y = ny, z = nz, w = nw }
-  while #buf > MAX_SAMPLES do table.remove(buf, 1) end
-
   if type(pkt.px) == 'number' and type(pkt.py) == 'number' and type(pkt.pz) == 'number' then
     state.px, state.py, state.pz = pkt.px, pkt.py, pkt.pz
     state.hasPosition = true
   end
+
+  local buf = state.samples
+  local t = localSampleTime(pkt)
+  if #buf > 0 and t <= buf[#buf].t then t = buf[#buf].t + 0.5 end -- stay strictly increasing
+  -- Position rides in the same buffer as orientation (same timestamp, same
+  -- packet), so AR 6DoF dollying gets the identical jitter-adaptive
+  -- delay+interpolation as rotation instead of just an exponential ease
+  -- toward whatever the latest raw sample happened to be.
+  buf[#buf + 1] = { t = t, x = nx, y = ny, z = nz, w = nw, px = state.px, py = state.py, pz = state.pz }
+  while #buf > MAX_SAMPLES do table.remove(buf, 1) end
 
   -- thumbstick velocity (m/s); anything silly is clamped
   local mx = type(pkt.mx) == 'number' and pkt.mx or 0
@@ -336,37 +340,50 @@ end
 -- Smoothing: interpolate the buffered samples at (now - state.renderDelay),
 -- then apply a light frame-rate-independent slerp on top.
 -- ============================================================
+local function lerp(a, b, f) return a + (b - a) * f end
+
+-- Returns the interpolated orientation quat plus the interpolated position
+-- (px, py, pz), both sampled from the same buffered/timestamped packets at
+-- the same delayed render time, so rotation and 6DoF translation stay in
+-- lock-step under jitter instead of one being smoothed and the other not.
 local function interpolatedTarget(renderTime)
   local buf = state.samples
   local n = #buf
-  if n == 0 then return quat(state.qx, state.qy, state.qz, state.qw) end
+  if n == 0 then return quat(state.qx, state.qy, state.qz, state.qw), state.px, state.py, state.pz end
   local newest = buf[n]
-  if n == 1 or renderTime >= newest.t then return quat(newest.x, newest.y, newest.z, newest.w) end
+  if n == 1 or renderTime >= newest.t then
+    return quat(newest.x, newest.y, newest.z, newest.w), newest.px, newest.py, newest.pz
+  end
   local oldest = buf[1]
-  if renderTime <= oldest.t then return quat(oldest.x, oldest.y, oldest.z, oldest.w) end
+  if renderTime <= oldest.t then
+    return quat(oldest.x, oldest.y, oldest.z, oldest.w), oldest.px, oldest.py, oldest.pz
+  end
   for i = n - 1, 1, -1 do   -- newest first: the render point is almost always near the end
     local a, b = buf[i], buf[i + 1]
     if renderTime >= a.t and renderTime <= b.t then
       local span = b.t - a.t
       local f = span > 1e-4 and (renderTime - a.t) / span or 1.0
-      return quat(a.x, a.y, a.z, a.w):slerp(quat(b.x, b.y, b.z, b.w), f)
+      local q = quat(a.x, a.y, a.z, a.w):slerp(quat(b.x, b.y, b.z, b.w), f)
+      return q, lerp(a.px, b.px, f), lerp(a.py, b.py, f), lerp(a.pz, b.pz, f)
     end
   end
-  return quat(newest.x, newest.y, newest.z, newest.w)
+  return quat(newest.x, newest.y, newest.z, newest.w), newest.px, newest.py, newest.pz
 end
 
 local function updateSmoothing(dt)
-  local target = interpolatedTarget(sim.time - state.renderDelay)
+  local target, tpx, tpy, tpz = interpolatedTarget(sim.time - state.renderDelay)
   local current = quat(state.sx, state.sy, state.sz, state.sw)
   local alpha = 1.0 - math.pow(config.extraSmooth, dt * 60)
   alpha = math.max(0.0, math.min(1.0, alpha))
   local out = current:slerp(target, alpha)
   state.sx, state.sy, state.sz, state.sw = out.x, out.y, out.z, out.w
 
-  -- position (6DoF): ease toward the latest, same time constant
-  state.spx = state.spx + (state.px - state.spx) * alpha
-  state.spy = state.spy + (state.py - state.spy) * alpha
-  state.spz = state.spz + (state.pz - state.spz) * alpha
+  -- position (6DoF): ease toward the same delayed, interpolated sample the
+  -- orientation targets, same time constant, so a dolly move de-jitters
+  -- exactly like a look move instead of snapping between raw packets.
+  state.spx = state.spx + (tpx - state.spx) * alpha
+  state.spy = state.spy + (tpy - state.spy) * alpha
+  state.spz = state.spz + (tpz - state.spz) * alpha
 
   -- zoom: eased in log space, so 1x->2x takes as long as 4x->8x, like a
   -- real zoom ring, and the packet rate never shows up as FOV steps
