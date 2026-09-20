@@ -8,7 +8,7 @@
   const RAD = M.RAD;
   const el = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const VERSION = '0.3.4';
+  const VERSION = '0.3.6';
 
   // ---------------- settings (remembered on this phone) ----------------
   const DEFAULTS = {
@@ -1044,7 +1044,14 @@
     toast(feedOn ? 'LIVE FEED ON' : 'LIVE FEED OFF');
   });
   el('feed').addEventListener('error', () => {
-    if (feedOn) toast('FEED UNAVAILABLE');
+    if (!feedOn) return;
+    // Leaving the button lit with a broken/blank image is a dead end: turn
+    // the feed off so the UI matches reality and the button invites a retry.
+    feedOn = false;
+    el('feed-btn').classList.remove('on');
+    el('stage').classList.remove('feed-on');
+    el('feed').src = '';
+    toast('FEED UNAVAILABLE');
   });
 
   // Save a still of the live feed to the phone. The feed is the only thing on

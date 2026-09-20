@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.5'
+local VERSION = '0.3.6'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -1033,6 +1033,10 @@ local function fullSlider(id, value, min, max, fmt)
   return (ui.slider(id, value, min, max, fmt))
 end
 
+-- "Reset all settings" wipes mount/trim/feel/axis tuning in one click; arm it
+-- first (mirrors the phone app's two-tap reset) so a stray click can't lose it.
+local resetArmedUntil = -1e9
+
 local function drawTuningTab()
   section('Camera mount')
   if ui.radioButton('Stick to the car (cockpit / first person)', config.anchorMode == 'car') then setMount('car') end
@@ -1087,10 +1091,21 @@ local function drawTuningTab()
   end
 
   ui.offsetCursorY(10)
-  if ui.button('Reset all settings', vec2(ui.availableSpaceX(), 0)) then
-    for k, v in pairs(DEFAULTS) do config[k] = v end
-    reanchor()
+  local armed = sim.time < resetArmedUntil
+  local size = vec2(ui.availableSpaceX(), 0)
+  local pressed
+  if armed then pressed = coloredButton('Click again to confirm reset', size, BTN_STOP)
+  else pressed = ui.button('Reset all settings', size) end
+  if pressed then
+    if armed then
+      resetArmedUntil = -1e9
+      for k, v in pairs(DEFAULTS) do config[k] = v end
+      reanchor()
+    else
+      resetArmedUntil = sim.time + 3000
+    end
   end
+  if armed then tip('Resets mount, trim, feel and axis settings back to defaults.') end
 end
 
 local function drawStatusTab()
