@@ -22,6 +22,8 @@
 
 Everything is included. The game starts the phone link by itself and stops it when AC closes.
 
+From source instead: clone this repo and run `Install.bat` (needs [Node.js](https://nodejs.org) LTS).
+
 ## Connect
 
 <img src="docs/images/start-screen.png" alt="Phone start screen" width="200" align="right">
@@ -86,7 +88,7 @@ on the PC (replays, OBS) and use the phone to operate the camera.
 | Problem | Fix |
 |---|---|
 | Two or more Handheld Cam icons | Old copies are installed. Connect tab → **Move old copies out**, then restart AC |
-| "The phone link would not start" | See Status → Phone link log. Reinstall from the release zip |
+| "The phone link would not start" | Update to 0.4.1 or newer (fixes `MODULE_NOT_FOUND`). Otherwise see Status → Phone link log |
 | Phone can't connect | Connect tab → **Phone can't connect?** → **Allow through Windows Firewall**. Phone must be on Wi-Fi |
 | Wrong address in the QR | Same section: pick the address on your home network |
 | Phone shows **NO GAME** | Open the Handheld Cam window in game |
@@ -104,6 +106,18 @@ on the PC (replays, OBS) and use the phone to operate the camera.
   over local UDP, provides the QR code and the live feed.
 - `lua-app/HandheldCam/`: CSP app. Starts the phone link, buffers and
   interpolates the motion, and drives the camera.
+
+## What's new
+
+**0.4.1**
+- Fixed the phone link failing to start in game (`MODULE_NOT_FOUND`).
+- Recording keeps working in AR mode; photos and videos waiting to be saved are queued, never replaced.
+
+**0.4.0**
+- One-step install: drag the zip into Content Manager; the game starts the phone link.
+- REC records video to the phone, and photos and videos keep the look and framing.
+- Smooth through full 360° turns.
+- Detects duplicate installs, one-click firewall fix, network address picker.
 
 ## Development
 
