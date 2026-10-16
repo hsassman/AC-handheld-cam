@@ -13,16 +13,23 @@ Requires [Content Manager](https://assettocorsa.club/content-manager.html) and
 
 ## Install
 
-1. Double-click **`Install.bat`** at the repo root. It asks Steam where Assetto
-   Corsa lives (any drive or library folder), or you can drop your
-   `assettocorsa` folder onto it. It installs the in-game app and sets up the
-   bridge: no terminal, no typing `npm start`.
-2. In Content Manager, enable **Handheld Cam** under Apps.
-3. Whenever you want to play, double-click **`Start Handheld Cam.bat`** and
-   keep its window open.
+**Easiest (no Node.js needed):** download `HandheldCam-<version>.zip` from
+the Releases page and drag it into Content Manager. Then enable
+**Handheld Cam** under Apps (Settings → Custom Shaders Patch → Apps, or
+the in-game app bar). That's it: the game starts the phone link by itself
+when you open the app window, and closes it when AC closes.
 
-Don't have Node.js? `Install.bat` will tell you and open the download page;
-run it again afterward. Run `Install.bat` again any time to update.
+**From a git checkout:** double-click **`Install.bat`**. It finds Assetto
+Corsa through Steam (or drop your `assettocorsa` folder onto it), installs
+the app with the phone link inside it, and moves any old backup copies out
+of `apps\lua`. This route needs [Node.js](https://nodejs.org) LTS.
+
+Build the release zip yourself with
+`powershell -ExecutionPolicy Bypass -File toolsuild-release.ps1`
+(output in `dist\`).
+
+`Start Handheld Cam.bat` still works if you'd rather run the phone link in
+its own window; the game uses it instead of starting its own.
 
 ## Connect your phone
 
@@ -175,14 +182,21 @@ They live in `bridge/certs/` and are gitignored.
 
 ## Troubleshooting
 
-- **Nothing shows up in the Connect tab:** make sure the bridge is running
-  (`Start Handheld Cam.bat`).
+- **Two or three Handheld Cam icons in the app bar:** old copies of the app
+  are installed (every folder in `apps\lua` loads as its own app, backups
+  included). They steal the phone's data. The Connect tab offers to move
+  them out; restart AC afterwards.
+- **"The phone link would not start":** the Status tab shows its log.
+  Reinstall from the release zip, or install Node.js and run `Install.bat`.
 - **Phone says NO GAME:** open the Handheld Cam window in-game (CSP only
   starts the app once its window has been opened).
-- **Phone won't connect over Wi-Fi:** open `https://<PC-IP>:8787/health` on
-  the phone first and accept the certificate warning, then try Connect again.
-- **Wrong IP in the QR (VPN, virtual machines):** the bridge prints the other
-  addresses it found. Start it with `set HC_IP=192.168.x.x` first to choose.
+- **Phone won't connect over Wi-Fi:** in the Connect tab open "Phone can't
+  connect?" and press **Allow through Windows Firewall** (one admin prompt).
+  Also check the phone is on Wi-Fi, not mobile data. Then open
+  `https://<PC-IP>:8787/health` on the phone, accept the certificate
+  warning, and tap Connect again.
+- **Wrong IP in the QR (VPN, virtual machines):** pick the right address
+  under "Phone can't connect?" in the Connect tab.
 - **"Port 8787 is already in use":** the bridge is already running in another
   window.
 - **Feed is choppy:** start the bridge with `set HC_FEED_FPS=15` (or lower)

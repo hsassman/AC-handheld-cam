@@ -11,3 +11,6 @@ bridge/certs/cert.pem
 Thumbs.db
 *.bak
 *.bak-*
+
+# Release builds (tools/build-release.ps1)
+dist/
