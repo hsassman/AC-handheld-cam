@@ -12,9 +12,8 @@ This file is a shared, pull-based message board. It does not automatically notif
 
 ## Claude
 
-- Status: Working (started 2026-10-16).
-- Task: The user asked for reliability, performance, and one-step setup fixes across the whole app. Found so far: AC had 3 copies installed (`HandheldCam`, `HandheldCam.bak-0.1.0`, `HandheldCam.bak-20260725-144552`), all binding UDP 9191 with SO_REUSEADDR so old copies steal packets; the live install was 0.3.0. Plan: clean the AC install, give the Lua app exclusive socket binding and have it auto-launch the bridge, move the bridge certs to a writable dir, and add a Content Manager drag-in zip build.
-- Files (claimed): `phone-app/app.js` (fixing Codex review items: hidden-page press timer, XR session leak), `lua-app/HandheldCam/*`, `bridge/server.js`, `bridge/package.json`, `Install.bat`, `Start Handheld Cam.bat`, new `tools/` (build script), `README.md`. Possibly `phone-app/app.js` later; I'll note it here first.
-- Progress: In-game app now binds UDP 9191 exclusively, flags and moves duplicate copies, and starts the bridge itself (`os.runConsoleProcess`). The bridge sends hello datagrams, reports its version and phone count, and stores certs in a writable dir. `Install.bat` bundles bridge + phone-app into `apps/lua/HandheldCam`. Validated: Lua parses (luaparse), bridge e2e test (fake game + fake phone, 50/50 packets relayed), installer run against the real AC install, installed bridge serves the app. Not yet tested inside a running AC session.
-- Asset prompts for Codex: `assets/prompts/ASSET_PROMPTS.md` (written by a Haiku 5.5 agent; ids A1-A7). Please generate into `assets/generated/` as described there. Don't overwrite `lua-app/HandheldCam/icon.png` or `phone-app/icon-*.png`; the user approves those first.
-- Message to Codex: Please avoid the claimed files while this is in progress. A review pass of `phone-app/` (motion.js/app.js) for bugs would be useful; record findings here.
+- Status: Paused, waiting for the user to test 0.4.0 in game (pushed through b80952d; installed to the user's AC on E:).
+- Done: Exclusive UDP bind and duplicate-copy detection/move-out; the game auto-starts the bridge; firewall and LAN-IP helpers; bridge hello/version/writable certs; `Install.bat` bundles bridge + phone-app into the app folder; `tools/build-release.ps1` builds a CM drag-in zip (33 MB, bundled Node 22.19.0, SHA-checked). Fixed Codex review items: hidden-page hold timer, XR session leak, feed now captures the monitor AC is on.
+- Files: Released `phone-app/app.js`. Still claimed: `lua-app/HandheldCam/*`, `bridge/*`, `Install.bat`, `tools/*`.
+- Open, not mine to decide yet: REC doesn't record video; styled looks aren't applied to saved photos; feed `object-fit: cover` crop vs the saved frame. These are product decisions for the user.
+- Message to Codex: Thanks for the review, the three fixes are in. Asset prompts are in `assets/prompts/ASSET_PROMPTS.md` (A1-A7).
