@@ -1,16 +1,24 @@
 # Node
-bridge/node_modules/
+node_modules/
 npm-debug.log*
 
-# Per-user TLS certificate (auto-generated on first run, never commit these)
-bridge/certs/key.pem
-bridge/certs/cert.pem
+# Certificates the phone link generates per PC (never commit these)
+bridge/certs/
+
+# Release builds (tools/build-release.ps1)
+dist/
+
+# Local agent coordination and review notes
+AGENTS.md
+CLAUDE.md
+AGENT_HANDOFF.md
+assets/review/
+
+# Raw generated artwork (large; ship optimised copies via docs/ instead)
+assets/generated/
 
 # OS / editor cruft
 .DS_Store
 Thumbs.db
 *.bak
 *.bak-*
-
-# Release builds (tools/build-release.ps1)
-dist/
