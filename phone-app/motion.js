@@ -82,29 +82,54 @@
   }
 
   // Scales the rotation angle of a unit quaternion (sensitivity) with a soft
-  // deadzone. Keeps the same hemisphere as the previous call so the angle can
-  // grow *continuously* past 180°; otherwise crossing 180° snaps the axis to
-  // the opposite side and the camera jolts across the screen.
+  // deadzone.
+  //
+  // A quaternion only knows the rotation modulo 720°, and its axis vanishes
+  // at every multiple of 360°, so scaling it directly breaks on a full turn:
+  // at exactly 360° the old version saw "no rotation" and the camera snapped
+  // back by ~110° at the default sensitivity. Instead this keeps an unwrapped
+  // rotation vector (axis * angle, in degrees) and, of all the angles that
+  // describe the same orientation (θ + 360°·m about the axis), takes the one
+  // closest to the previous call. The angle therefore keeps growing smoothly
+  // through any number of turns, in either direction.
   //
   // The deadzone ramps in quadratically up to twice its size and is linear
-  // (offset by the deadzone) beyond, so there is no step at its edge: the old
-  // hard cut made the camera jump by the full deadzone the moment you left it.
+  // (offset by the deadzone) beyond, so there is no step at its edge.
   function makeAngleScaler() {
-    let prev = Q_IDENT;
+    let rx = 0, ry = 0, rz = 0;          // previous unwrapped rotation vector (deg)
     return {
-      reset() { prev = Q_IDENT; },
+      reset() { rx = ry = rz = 0; },
       apply(q, scale, deadzoneDeg) {
-        if (qDot(q, prev) < 0) q = { x: -q.x, y: -q.y, z: -q.z, w: -q.w };
-        prev = q;
+        if (q.w < 0) q = { x: -q.x, y: -q.y, z: -q.z, w: -q.w };
         const vlen = Math.hypot(q.x, q.y, q.z);
-        if (vlen < 1e-7) return Q_IDENT;
-        const angle = 2 * Math.atan2(vlen, q.w) * DEG;   // 0..360
+        const theta = 2 * Math.atan2(vlen, q.w) * DEG;   // 0..180 with w >= 0
+        let nx, ny, nz;
+        if (vlen > 1e-9) { nx = q.x / vlen; ny = q.y / vlen; nz = q.z / vlen; }
+        else {
+          // no axis (identity, or a whole number of turns): keep the last one
+          const pl = Math.hypot(rx, ry, rz);
+          if (pl < 1e-9) return Q_IDENT;
+          nx = rx / pl; ny = ry / pl; nz = rz / pl;
+        }
+        // candidates (theta + 360m)·n: pick the m nearest the previous vector
+        const proj = rx*nx + ry*ny + rz*nz;
+        let m = Math.round((proj - theta) / 360), best = Infinity, bestA = theta;
+        for (let k = m - 1; k <= m + 1; k++) {
+          const a = theta + 360 * k;
+          const d = Math.hypot(a*nx - rx, a*ny - ry, a*nz - rz);
+          if (d < best) { best = d; bestA = a; }
+        }
+        rx = bestA * nx; ry = bestA * ny; rz = bestA * nz;
+
+        const angle = Math.abs(bestA);
+        if (angle < 1e-9) return Q_IDENT;
+        const sgn = bestA < 0 ? -1 : 1;
         const dz = Math.max(0, deadzoneDeg || 0);
         const eff = dz > 0 ? (angle < 2*dz ? angle*angle / (4*dz) : angle - dz) : angle;
         if (eff < 1e-6) return Q_IDENT;
         const half = eff * RAD * 0.5 * scale;
-        const s = Math.sin(half) / vlen;
-        return { x: q.x*s, y: q.y*s, z: q.z*s, w: Math.cos(half) };
+        const s = Math.sin(half) * sgn;
+        return { x: nx*s, y: ny*s, z: nz*s, w: Math.cos(half) };
       },
     };
   }

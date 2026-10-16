@@ -8,7 +8,7 @@
   const RAD = M.RAD;
   const el = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const VERSION = '0.3.6';
+  const VERSION = '0.4.0';
 
   // ---------------- settings (remembered on this phone) ----------------
   const DEFAULTS = {
@@ -23,6 +23,7 @@
     haptics: true, sound: true,
     walkSpeed: 2.5,       // m/s at full thumbstick deflection
     fly: false,           // thumbstick forward follows the lens pitch
+    recVideo: true,       // REC also records the live feed (with the look) to a video
   };
   const settings = Object.assign({}, DEFAULTS);
   try {
@@ -67,6 +68,11 @@
   let sensorKind = null;
   const scaler = M.makeAngleScaler();
   const toPRY = M.makeAttitude();
+
+  // GPU look renderer for the live feed (look.js). null without WebGL, in
+  // which case the CSS looks show on screen and saves are ungraded.
+  const lookR = window.HCLook ? window.HCLook.create(el('look')) : null;
+  if (lookR) lookR.setSource(el('feed'));
 
   // ---- WebXR 6DoF (AR) state ----
   let xrSession = null;
@@ -234,6 +240,8 @@
         try { shutter.releasePointerCapture(id); } catch (_) {}
       }
       if (stickVec.x || stickVec.y || stick.classList.contains('on')) endMove();  // never leave the camera walking
+      // the page stops drawing while hidden: close the clip so it isn't frozen
+      if (lookR && lookR.recording) stopVideo();
     }
   });
 
@@ -284,6 +292,7 @@
 
   function tick(now) {
     if (!xrActive) stepMotion(now);              // XR drives its own steps
+    if (lookR && feedOn && !xrActive && lookR.frame(now)) el('stage').classList.add('gl-on');
     requestAnimationFrame(tick);
   }
 
@@ -585,6 +594,8 @@
     engaged = v;
     el('stage').classList.toggle('engaged', engaged);
     if (engaged) recStart = Date.now();
+    if (engaged && mode !== 'photo' && settings.recVideo) startVideo();
+    if (!engaged) stopVideo();
     if (mode !== 'photo') recTone(engaged);
     haptic(engaged ? [10, 40, 10] : 10);
     if (!engaged) setPhotoHold(false);
@@ -735,6 +746,8 @@
       mode = b.dataset.mode;
       el('stage').classList.toggle('photo-mode', mode === 'photo');
       setPhotoHold(false);
+      if (mode === 'photo') stopVideo();                 // a photo session isn't a clip
+      else if (engaged && settings.recVideo && !(lookR && lookR.recording)) startVideo();
       haptic(8);
       toast(mode === 'slomo' ? 'SLO-MO' : mode.toUpperCase());
       sendPacket();
@@ -974,6 +987,7 @@
     filterId = f.id;
     osdMode = f.osd || null;
     stage.classList.toggle('osd-on', !!osdMode);
+    if (lookR) { lookR.setLook(f.id); if (!osdMode) lookR.setOsd(null); }
     updateOsd();
     document.querySelectorAll('#filter-strip .fchip').forEach((b) =>
       b.classList.toggle('sel', b.dataset.f === f.id));
@@ -987,9 +1001,11 @@
     if (!osdMode) return;
     const d = new Date();
     const time = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
-    el('osd-text').textContent = osdMode === 'security'
+    const text = osdMode === 'security'
       ? `CAM 01  ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}  ${time}`
       : `${engaged ? '● REC  ' : ''}${MONTHS[d.getMonth()]} ${p2(d.getDate())} ${d.getFullYear()}  ${time}`;
+    el('osd-text').textContent = text;
+    if (lookR) lookR.setOsd(text);
   }
   setInterval(updateOsd, 500);
 
@@ -1049,24 +1065,30 @@
     feedOn = !feedOn;
     el('feed-btn').classList.toggle('on', feedOn);
     el('stage').classList.toggle('feed-on', feedOn);
+    if (!feedOn) el('stage').classList.remove('gl-on');
     el('feed').src = feedOn ? `/feed?${Date.now()}` : '';
     toast(feedOn ? 'LIVE FEED ON' : 'LIVE FEED OFF');
+    if (!feedOn && lookR && lookR.recording) stopVideo();
   });
+  window.addEventListener('resize', () => { if (lookR) lookR.relayout(); });
   el('feed').addEventListener('error', () => {
     if (!feedOn) return;
     // Leaving the button lit with a broken/blank image is a dead end: turn
     // the feed off so the UI matches reality and the button invites a retry.
     feedOn = false;
     el('feed-btn').classList.remove('on');
-    el('stage').classList.remove('feed-on');
+    el('stage').classList.remove('feed-on', 'gl-on');
     el('feed').src = '';
     toast('FEED UNAVAILABLE');
+    if (lookR && lookR.recording) stopVideo();
   });
 
   // Save a still of the live feed to the phone. The feed is the only thing on
   // screen that's actual camera pixels (the rest of the viewfinder is CSS/SVG
-  // chrome), so a photo needs it on and at least one frame in.
-  function saveFrame() {
+  // chrome), so a photo needs it on and at least one frame in. With the GPU
+  // renderer the photo is exactly the viewfinder: same crop, same look,
+  // date stamp included. Without it, the same crop, ungraded.
+  async function saveFrame() {
     const feedImg = el('feed');
     if (!feedOn) {
       el('feed-btn').click();
@@ -1074,27 +1096,83 @@
       return;
     }
     if (!feedImg.naturalWidth) { toast('FEED NOT READY YET'); return; }
-    let canvas, blob;
-    try {
-      canvas = document.createElement('canvas');
-      canvas.width = feedImg.naturalWidth;
-      canvas.height = feedImg.naturalHeight;
-      canvas.getContext('2d').drawImage(feedImg, 0, 0);
-    } catch (e) { toast('SAVE FAILED'); return; }
-    canvas.toBlob((b) => {
-      blob = b;
-      if (!blob) { toast('SAVE FAILED'); return; }
-      deliverPhoto(blob);
-    }, 'image/jpeg', 0.92);
+    let blob = null;
+    if (lookR && lookR.ready) blob = await lookR.snapshot(0.92);
+    if (!blob) blob = await croppedStill(feedImg);
+    if (!blob) { toast('SAVE FAILED'); return; }
+    deliverFile(blob, 'jpg', 'image/jpeg');
   }
+
+  // the part of the frame the viewfinder shows (object-fit: cover, centred)
+  function croppedStill(img) {
+    return new Promise((resolve) => {
+      try {
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const sw = img.naturalWidth, sh = img.naturalHeight;
+        const k = Math.max(vw / sw, vh / sh);
+        const cw = Math.round(vw / k), ch = Math.round(vh / k);
+        const canvas = document.createElement('canvas');
+        canvas.width = cw; canvas.height = ch;
+        canvas.getContext('2d').drawImage(img, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, cw, ch);
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  // ---------------- video: REC records the graded feed to the phone ----------------
+  let pendingFile = null;             // { blob, ext, type } when the share sheet needs a fresh tap
+  let videoStartWanted = false;
+
+  function videoExt(type) { return /mp4/.test(type) ? 'mp4' : 'webm'; }
+
+  function startVideo() {
+    if (!lookR || !lookR.canRecord()) {
+      toast("THIS BROWSER CAN'T SAVE VIDEO", 2200);
+      return;
+    }
+    if (lookR.recording) return;
+    if (!feedOn) el('feed-btn').click();
+    videoStartWanted = true;
+    const t0 = performance.now();
+    // the recorder needs a real frame on the canvas first
+    (function waitForFrame() {
+      if (!videoStartWanted) return;
+      if (lookR.ready && feedOn) {
+        videoStartWanted = false;
+        if (lookR.startRecording()) {
+          el('stage').classList.add('recording-video');
+          toast('RECORDING TO PHONE', 1200);
+        } else toast('VIDEO COULD NOT START', 1800);
+        return;
+      }
+      if (performance.now() - t0 > 8000) { videoStartWanted = false; toast('NO FEED, NOT SAVING VIDEO', 2000); return; }
+      setTimeout(waitForFrame, 100);
+    })();
+  }
+
+  async function stopVideo() {
+    videoStartWanted = false;
+    if (!lookR || !lookR.recording) return;
+    el('stage').classList.remove('recording-video');
+    const blob = await lookR.stopRecording();
+    if (!blob || !blob.size) { toast('NOTHING RECORDED'); return; }
+    deliverFile(blob, videoExt(blob.type), blob.type);
+  }
+
+  el('video-chip').addEventListener('click', () => {
+    const f = pendingFile;
+    pendingFile = null;
+    el('video-chip').hidden = true;
+    if (f) deliverFile(f.blob, f.ext, f.type);
+  });
 
   // Prefer the native share sheet (iOS Safari and Android Chrome both offer
   // "Save Image" / "Save to Photos" from it); fall back to a plain download,
   // which Android saves straight to Downloads. Either way the browser, not
   // this page, owns where the file ends up.
-  async function deliverPhoto(blob) {
-    const name = `handheldcam-${Date.now()}.jpg`;
-    const file = (() => { try { return new File([blob], name, { type: 'image/jpeg' }); } catch (_) { return null; } })();
+  async function deliverFile(blob, ext, type) {
+    const name = `handheldcam-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`;
+    const file = (() => { try { return new File([blob], name, { type }); } catch (_) { return null; } })();
     if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file] });
@@ -1103,13 +1181,22 @@
         return;
       } catch (e) {
         if (e && e.name === 'AbortError') return;   // user dismissed the sheet, not an error
+        // The share sheet needs a fresh tap, and a recording finishes a
+        // moment after the tap that stopped it: offer one instead of failing.
+        if (e && e.name === 'NotAllowedError') {
+          pendingFile = { blob, ext, type };
+          el('video-chip').textContent = ext === 'jpg' ? 'PHOTO READY · SAVE' : 'VIDEO READY · SAVE';
+          el('video-chip').hidden = false;
+          toast('TAP SAVE TO KEEP IT', 1600);
+          return;
+        }
       }
     }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
     haptic([6, 30, 6]);
     toast('SAVED', 1300);
   }
@@ -1184,6 +1271,10 @@
   bindSwitch('inv-yaw', 'invYaw');
   bindSwitch('inv-roll', 'invRoll');
   bindSwitch('tg-grid', 'grid', applyDisplayToggles);
+  bindSwitch('tg-recvideo', 'recVideo', () => {
+    if (!settings.recVideo) stopVideo();
+    else if (engaged && mode !== 'photo') startVideo();
+  });
   bindSwitch('tg-attitude', 'attitude', applyDisplayToggles);
   bindSwitch('tg-haptics', 'haptics', () => haptic(10));
   bindSwitch('tg-sound', 'sound', () => { unlockAudio(); shutterSound(); });
@@ -1232,6 +1323,7 @@
     setSwitch('inv-yaw', settings.invYaw);
     setSwitch('inv-roll', settings.invRoll);
     setSwitch('tg-grid', settings.grid);
+    setSwitch('tg-recvideo', settings.recVideo);
     setSwitch('tg-attitude', settings.attitude);
     setSwitch('tg-haptics', settings.haptics);
     setSwitch('tg-sound', settings.sound);

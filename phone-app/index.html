@@ -110,6 +110,7 @@
 <div id="stage">
   <div id="imagelayer">
     <img id="feed" alt="" />
+    <canvas id="look" aria-hidden="true"></canvas>
     <div id="backdrop"></div>
   </div>
 
@@ -141,6 +142,7 @@
         <span id="home-dist">0.0 m</span>
       </button>
       <span class="chip" id="hold-chip" hidden>HOLD</span>
+      <button class="chip" id="video-chip" hidden title="Save the clip you just recorded">VIDEO READY · SAVE</button>
     </div>
     <div id="tb-right">
       <div class="chip" id="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span><span id="conn-lat"></span></div>
@@ -292,6 +294,7 @@
 
   <h2>Display</h2>
   <div class="group">
+    <div class="srow"><span>Save video to this phone<small>REC also records the live feed, with your look, to a video file</small></span><button class="sw" id="tg-recvideo" role="switch"></button></div>
     <div class="srow"><span>Grid</span><button class="sw" id="tg-grid" role="switch"></button></div>
     <div class="srow"><span>Level indicator</span><button class="sw" id="tg-attitude" role="switch"></button></div>
     <div class="srow"><span>Haptics</span><button class="sw" id="tg-haptics" role="switch"></button></div>
@@ -309,6 +312,7 @@
 </div>
 
 <script src="/motion.js"></script>
+<script src="/look.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

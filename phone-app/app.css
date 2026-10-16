@@ -49,6 +49,15 @@ input { user-select: text; -webkit-user-select: text; }
 }
 #stage.feed-on #feed { display: block; }
 
+/* GPU look renderer: once it has a frame, it replaces the <img> (kept
+   decoding underneath) and the CSS grade/overlays/OSD, which it draws
+   itself, so preview, photos and video are the same pixels. */
+#look { position: absolute; inset: 0; width: 100%; height: 100%; display: none; background: #000; }
+#stage.feed-on.gl-on #look { display: block; }
+#stage.feed-on.gl-on #feed { opacity: 0; }
+#stage.feed-on.gl-on #imagelayer { filter: none !important; animation: none !important; }
+#stage.feed-on.gl-on .fx-l, #stage.feed-on.gl-on #osd { display: none; }
+
 #backdrop {
   position: absolute; inset: 0;
   background:
@@ -224,7 +233,9 @@ input { user-select: text; -webkit-user-select: text; }
 #conn-lat { color: var(--dim); }
 #tb-right { display: flex; gap: 8px; align-items: center; }
 #tb-left { display: flex; gap: 8px; align-items: center; min-width: 0; }
-#home-chip[hidden], #hold-chip[hidden], #batt[hidden] { display: none; }
+#home-chip[hidden], #hold-chip[hidden], #video-chip[hidden], #batt[hidden] { display: none; }
+#video-chip { color: var(--accent); }
+#stage.recording-video #timer { box-shadow: 0 0 0 1.5px rgba(255,255,255,.55) inset; }
 #home-chip svg { width: 14px; height: 14px; }
 #hold-chip { color: var(--accent); }
 
