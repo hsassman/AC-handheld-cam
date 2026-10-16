@@ -1,212 +1,279 @@
-# Handheld Cam
+<h1 align="center">Handheld Cam</h1>
 
-Turn your phone into a handheld camera for Assetto Corsa. Hold it like a
-viewfinder and steer the in-game camera with real, full-range motion: turn a
-full 90 or 180 degrees to look back, with no gimbal flips. Hold the record
-button and drag it like a thumbstick to walk the camera around the car, on any
-phone, iPhone included.
+<p align="center">
+  <b>Your phone becomes a handheld camera for Assetto Corsa.</b><br>
+  Point it to aim, drag the zoom wheel, hold the record button to walk around the car,<br>
+  and save the shot to your phone with a period camcorder look.
+</p>
 
-<p align="center"><img src="phone-app/preview.jpg" alt="Handheld Cam viewfinder" width="420"></p>
+<p align="center">
+  <img src="docs/images/viewfinder.png" alt="The Handheld Cam viewfinder on a phone, held in landscape" width="820">
+</p>
 
-Requires [Content Manager](https://assettocorsa.club/content-manager.html) and
-[Custom Shaders Patch](https://acstuff.club/patch/).
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#connect-your-phone">Connect</a> ·
+  <a href="#using-the-phone-app">Phone app</a> ·
+  <a href="#looks-photos-and-video">Looks and video</a> ·
+  <a href="#in-game-window">In-game window</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="#how-it-works">How it works</a>
+</p>
+
+---
+
+## What it does
+
+- **Real handheld motion.** The phone's orientation drives the in-game camera
+  through the full range: turn 90°, 180° or right round in a full circle,
+  with no gimbal flips. Sensitivity, smoothing and a deadzone for hand
+  tremor are adjustable.
+- **Walk the camera around.** Hold the record button and drag it like a
+  thumbstick to walk or fly the camera, on any phone, iPhone included. On
+  Android, AR mode tracks you physically stepping around instead.
+- **A real lens.** 0.5× to 15× zoom with a lens-ring wheel. 1.0× is always
+  exactly the game's own framing, and the readout shows the true 35 mm
+  equivalent focal length.
+- **Looks that you can keep.** VHS, Camcorder '92, Hi8, Broadcast '95,
+  Super 8, Security and Neon '89. With the live feed on, recordings and
+  photos saved to your phone carry the look and the framing you see.
+- **One-step setup.** Drag one zip into Content Manager, open the app in
+  game, scan the QR code. The game starts and stops everything else by
+  itself.
+
+Needs Assetto Corsa with [Content Manager](https://assettocorsa.club/content-manager.html)
+and [Custom Shaders Patch](https://acstuff.club/patch/), and a phone on the same
+Wi-Fi as the PC (any recent iPhone or Android phone).
 
 ## Install
 
-**Easiest (no Node.js needed):** download `HandheldCam-<version>.zip` from
-the Releases page and drag it into Content Manager. Then enable
-**Handheld Cam** under Apps (Settings → Custom Shaders Patch → Apps, or
-the in-game app bar). That's it: the game starts the phone link by itself
-when you open the app window, and closes it when AC closes.
+**The easy way (nothing else to install):**
 
-**From a git checkout:** double-click **`Install.bat`**. It finds Assetto
-Corsa through Steam (or drop your `assettocorsa` folder onto it), installs
-the app with the phone link inside it, and moves any old backup copies out
-of `apps\lua`. This route needs [Node.js](https://nodejs.org) LTS.
+1. Download `HandheldCam-<version>.zip` from the
+   [Releases page](https://github.com/hsassman/AC-handheld-cam/releases).
+2. Drag the zip onto Content Manager and confirm the install.
+3. Start a session and open **Handheld Cam** from the app bar on the right
+   of the screen.
 
-Build the release zip yourself with
-`powershell -ExecutionPolicy Bypass -File toolsuild-release.ps1`
-(output in `dist\`).
+The zip includes everything: the in-game app, the phone link (bridge), the
+phone web app and a private copy of Node.js that only Handheld Cam uses.
+The game starts the phone link when you open the app window and closes it
+when Assetto Corsa closes.
 
-`Start Handheld Cam.bat` still works if you'd rather run the phone link in
-its own window; the game uses it instead of starting its own.
+**From a git checkout** (for development): double-click `Install.bat`. It
+finds Assetto Corsa through Steam (or drop your `assettocorsa` folder on it),
+installs the app with the phone link inside it, and moves old copies of the
+app out of `apps\lua`. This route needs [Node.js](https://nodejs.org) LTS.
+Run it again any time to update.
+
+To build the release zip yourself:
+`powershell -ExecutionPolicy Bypass -File tools\build-release.ps1`
+(the zip lands in `dist\`).
+
+> **Only keep one copy.** Every folder in `apps\lua` is a separate app to
+> CSP, backups included. Two copies show as two icons and fight over the
+> phone's data. The in-game window warns you and offers to move extras out.
 
 ## Connect your phone
 
-Open the **Handheld Cam** window in-game. The **Connect** tab shows a QR code
-and a connect code.
+<img src="docs/images/start-screen.png" alt="Phone start screen" width="230" align="right">
 
-- **QR (easiest):** point your phone's camera app at the QR code. It opens
-  the web app; tap **Connect**.
-- **Type a code:** open `https://<PC-IP>:8787` on the phone, or type the
-  code from the Connect tab on the start screen.
-- **USB (Android):** run `bridge/usb-android.bat`, then open
-  `https://localhost:8787` on the phone. No Wi-Fi, no certificate warning.
-  (iPhone over USB isn't practical; use QR or Wi-Fi instead.)
+1. In game, open **Handheld Cam** and go to the **Connect** tab. It shows a
+   QR code and a short code (your PC's address).
+2. Scan the QR code with the phone's camera app.
+3. The first time only, the browser warns about the certificate. Tap
+   **Advanced** then **Proceed** (Chrome) or **Show Details** then **visit
+   this website** (Safari). The phone link makes its own certificate, and
+   phones only allow motion sensors on secure pages.
+4. Tap **Connect**. On iPhone, allow motion access when asked.
 
-Over Wi-Fi the phone shows a self-signed certificate warning once; accept it.
-This is required: mobile browsers won't deliver motion data to a plain
-`http://` page.
+No QR scanner? Type the code from the Connect tab into the start screen.
 
-The connection chip at the top right tells you where things stand:
-**LIVE** (with the round-trip time) means the game is receiving you,
-**NO GAME** means the phone reached the PC but the in-game window isn't open,
-**STANDBY** means another phone has control (tap **Take over**).
+**USB (Android, no Wi-Fi needed):** with USB debugging enabled and
+[platform-tools](https://developer.android.com/tools/releases/platform-tools)
+installed, run `bridge\usb-android.bat` from this repository, then open
+`https://localhost:8787` on the phone. There's no certificate warning over
+USB.
 
-Optional: add the web app to your home screen (Share → Add to Home Screen /
-Chrome's install prompt) so it runs full-screen with no address bar.
+**Add it to your home screen** (Share → Add to Home Screen on iPhone,
+Chrome's install prompt on Android) to run it full screen. On iPhone that's
+the only way to hide the address bar.
+
+The chip at the top right shows where things stand:
+
+| Chip | Meaning |
+|---|---|
+| **LIVE** 12 ms | The game is receiving you (round-trip time) |
+| **NO GAME** | The phone reached the PC but the in-game window isn't open yet |
+| **STANDBY** | Another phone has control. Tap **Take over** |
+| **RECONNECTING** | Wi-Fi dropped; it retries by itself |
+
+<br clear="right">
 
 ## Using the phone app
 
-- **Record button:** tap to engage or disengage the in-game camera. Connects
-  first if you're not paired yet.
-- **Hold to move:** press and hold the record button (or drag off it) and it
-  becomes a thumbstick: up walks forward along the lens, sideways strafes, and
-  how far you push sets the speed. Choose **Walk** (stays level) or **Fly**
-  (goes where you aim) and the top speed in Settings. The chip at the top left
-  shows how far you've moved; tap it to bring the camera home. Recenter also
-  brings it home.
-- **Modes:** VIDEO, SLO-MO (extra-smooth drift), PHOTO. In PHOTO the shutter
-  takes a shot: the frame flashes, the game saves a full-quality screenshot
-  (Documents\Assetto Corsa\screens) and the framing holds until you tap again.
-- **Zoom:** tap **.5 / 1× / 2 / 5** to jump, or drag across them to open the
-  zoom wheel (0.5x to 15x, detent at 1.0x, double-tap to reset). The readout
-  shows the real 35 mm-equivalent focal length of the game camera.
-- **Recenter:** zeroes the current pose as "facing forward" and brings a
-  walked camera home.
-- **Feed button:** toggles a live view of the game behind the HUD.
-- **Save button:** saves a photo of the live feed to the phone (share sheet
-  on iOS, straight to Downloads on Android). Needs the live feed on, since
-  that's the only real camera pixels on screen; the rest of the viewfinder
-  is HUD chrome.
-- **Grid / looks buttons:** rule-of-thirds grid, and a picker of period
-  camera looks (VHS, Camcorder '92, Hi8, Broadcast '95, Super 8, Security,
-  Neon '89). These change how the viewfinder looks, not what the game
-  renders or records.
-- **Settings:** connection status, sensitivity, stabilisation, deadzone, walk
-  speed and style, per-axis invert, haptics, shutter sound, keep awake,
-  fullscreen, and **Start AR 6DoF movement** (Android only, see below).
-  Everything is remembered on the phone.
+<p align="center">
+  <img src="docs/images/hold-to-walk.png" alt="Holding the record button turns it into a thumbstick" width="620">
+</p>
 
-Works in landscape (the reference layout) and portrait.
+- **Record button.** Tap to take over the in-game camera, tap again to hand
+  it back. With the live feed on it also records a video to your phone (see
+  below).
+- **Hold to move.** Press and hold the record button, or drag off it, and it
+  becomes a thumbstick. Up walks forward along the lens, sideways strafes,
+  and how far you push sets the speed. **Walk** stays level; **Fly** goes
+  where you aim. The chip at the top left shows how far you've moved; tap
+  it to bring the camera home.
+- **Modes.** VIDEO, SLO-MO (extra smoothing for slow cinematic drift) and
+  PHOTO. In PHOTO the shutter flashes, the game saves a full-quality
+  screenshot to `Documents\Assetto Corsa\screens`, and the framing holds
+  until you tap again.
+- **Zoom.** Tap **.5 / 1× / 2 / 5** to jump, or drag across them to open the
+  zoom wheel (0.5× to 15×, with a detent at 1.0×; double-tap to reset).
+- **Left rail.** Recenter (makes the current pose "straight ahead" and
+  brings a walked camera home), live feed, save photo, grid, looks.
+- **Works in landscape and portrait.**
+
+<p align="center">
+  <img src="docs/images/settings.png" alt="Phone settings sheet" width="560">
+  <img src="docs/images/portrait.png" alt="Viewfinder in portrait" width="190">
+</p>
+
+**Settings** (the slider icon): connection status, sensitivity, smoothing,
+deadzone, walk speed and walk/fly, per-axis invert, AR 6DoF movement
+(Android Chrome), save video to this phone, grid, level indicator, haptics,
+shutter sound, keep screen awake and fullscreen. Everything is remembered on
+the phone.
+
+**AR movement (Android).** Settings → **Start AR 6DoF movement** uses the
+phone's own tracking (WebXR), so stepping or leaning moves the camera.
+iPhone browsers don't offer WebXR, so iPhones use the thumbstick.
+
+## Looks, photos and video
+
+<p align="center">
+  <img src="docs/images/looks.jpg" alt="The seven looks applied to the viewfinder" width="820">
+</p>
+
+Pick a look with the looks button (three circles). With the **live feed**
+on, the phone renders the game picture through the look on its GPU, so:
+
+- **What you see is what you save.** Photos (download button) and videos
+  have the same framing as the viewfinder, the same look, and the camcorder
+  date stamp where the look has one.
+- **Video.** In VIDEO or SLO-MO, the record button also records the live
+  feed to an MP4 (WebM on browsers that can't write MP4). When you stop,
+  the phone's share sheet opens: choose **Save Video** (iPhone) or it goes
+  to Downloads (Android). If the sheet can't open straight away, a
+  **VIDEO READY · SAVE** chip appears; tap it. Turn this off with
+  **Save video to this phone** in Settings.
+- **Photo.** The download button saves a still the same way.
+
+The live feed is the PC screen captured by the phone link, at up to 30 fps
+by default. Its resolution and frame rate set the quality of phone
+recordings. For full-quality video, record on the PC (AC replays, OBS,
+ShadowPlay) while you operate the camera from the phone.
+
+Looks change the phone's picture only, never what the game renders.
 
 ## In-game window
 
-Resizable, with four tabs. Settings are saved between sessions.
+The window is resizable and has four tabs. Settings are saved between
+sessions.
 
-- **Connect:** the pairing QR and code.
-- **Camera:** start/stop, recenter, re-attach, a live attitude dial with lens
-  readout, and "walk home" when you've moved the camera.
-- **Tuning:** camera mount (stick to the car / tripod / follow AC), mount
-  trim, extra stabilisation, zoom inertia, what the phone is allowed to do,
-  per-axis invert, and **hotkeys** for start/stop and recenter (keyboard or
-  wheel buttons).
-- **Status:** connection, packets, camera state, zoom maths and errors.
+- **Connect.** The pairing QR and code, how many phones are connected, and
+  **Phone can't connect?**: one-click Windows Firewall permission, and a
+  picker for the right network address if your PC has several (VPNs,
+  virtual machines).
+- **Camera.** Start/stop, recenter, re-attach, a live attitude dial with
+  the lens readout, and **Walk home** once you've moved the camera.
+- **Tuning.** Camera mount (stick to the car, tripod, or follow AC's own
+  camera), mount trim, extra stabilisation, zoom inertia, what the phone is
+  allowed to do, per-axis invert, and **hotkeys** for start/stop and
+  recenter (keyboard or wheel buttons).
+- **Status.** Phone link, socket, packets, buffer, camera state, zoom maths,
+  and the phone link's log when something goes wrong.
 
-Stopping the camera in-game wins over the phone: the phone's record button
-takes it back with its next press.
-
-## How it works
-
-```
- phone browser              this PC
- (index.html)     WS        (bridge/server.js)      UDP        CSP Lua app
- orientation   <------->    ws <-> udp relay      <------->    HandheldCam.lua
- (quaternion)               + QR pairing + feed                (in-game camera)
-```
-
-- **`phone-app/`**: the web app that runs on your phone. Reads the phone's
-  orientation as a quaternion (the sensor's own quaternion on Android Chrome,
-  device-orientation events elsewhere; never raw Euler angles, which have
-  gimbal lock and can't sweep past 90 degrees cleanly) and streams it at the
-  display rate over WebSocket, along with zoom, mode and thumbstick input.
-- **`bridge/`**: a small Node.js server that runs on your PC. Serves the
-  phone app over HTTPS, relays packets to a local UDP port, relays the game's
-  status back to the phone, answers latency pings, lets one phone control
-  the camera at a time, and exposes the pairing QR.
-- **`lua-app/HandheldCam/`**: the CSP Lua app. Listens on that UDP port,
-  interpolates the phone's motion for stutter-free playback, applies it to
-  the camera and reports back what it's doing.
+Stopping the camera in game wins over the phone; the phone's record button
+takes it back on its next press.
 
 ### Camera mount
 
-Grabbing the camera stops AC from moving it, so the app rebuilds the
-position every frame from an anchor captured the moment you engage:
+Taking over the camera stops AC from moving it, so the app rebuilds the
+position every frame from where the camera was when you engaged:
 
-- **Stick to the car** (default): rigidly attached, rides with the car
-  including suspension and body roll. Walking moves you around the car and
-  still rides with it.
-- **Lock to a fixed spot:** stays where you engaged it, like a tripod.
-- **Follow AC's own camera:** the camera keeps using AC's own position.
+- **Stick to the car** (default): rigidly attached, including suspension and
+  body roll. Walking moves you around the car and still rides with it.
+- **Lock to a fixed spot**: stays put like a tripod while the car drives off.
+- **Follow AC's own camera**: keeps AC's own camera position.
 
-It re-anchors automatically on a view change (F1/F3/F6), a focused-car
-change, or **Re-attach here** / recenter.
-
-### Zoom
-
-The phone sends a zoom *factor* (e.g. `2.4`), not an absolute FOV. The Lua
-app turns that into a FOV using real lens math off the camera's own FOV, so
-1.0x always matches the game's own framing, whatever car or camera you're
-in, and eases the lens toward it so zooming feels like turning a ring.
-
-### Smoothing
-
-The phone streams at the display rate; the game renders faster and the
-network adds jitter. The Lua app timestamps samples on the phone's clock,
-plays them back about 70 ms behind realtime, and slerps between them, so
-bursty packets turn into continuous motion.
-
-### AR / 6DoF movement
-
-Phone motion sensors alone can't give reliable position (accelerometer
-double integration drifts within a second), which is why hold-to-move exists.
-On Android Chrome, **Start AR 6DoF movement** (Settings) opens a WebXR AR
-session using the phone's own tracking, so physically stepping or leaning
-dollies the in-game camera. iOS Safari has no WebXR AR, so iPhones use the
-thumbstick instead.
-
-## Live feed
-
-The bridge captures the desktop and re-serves it as MJPEG, only while a
-phone is actually viewing it, at up to 30 fps by default. Screen capture
-competes with the game for the GPU, so if you see stutter while driving,
-turn the feed off or start the bridge with `set HC_FEED_FPS=15` (or lower)
-first; raise it the same way if your rig can spare more GPU for it.
-
-## Certificates
-
-The bridge generates its own self-signed certificate, valid for `localhost`,
-`127.0.0.1` and your PC's LAN IP. If your PC's IP changes, it notices and makes
-a new one on the next start (the phone will ask you to accept it once more).
-They live in `bridge/certs/` and are gitignored.
+It re-attaches by itself when you change view (F1/F3/F6) or focus another
+car, and on **Re-attach here** or recenter.
 
 ## Troubleshooting
 
-- **Two or three Handheld Cam icons in the app bar:** old copies of the app
-  are installed (every folder in `apps\lua` loads as its own app, backups
-  included). They steal the phone's data. The Connect tab offers to move
-  them out; restart AC afterwards.
-- **"The phone link would not start":** the Status tab shows its log.
-  Reinstall from the release zip, or install Node.js and run `Install.bat`.
-- **Phone says NO GAME:** open the Handheld Cam window in-game (CSP only
-  starts the app once its window has been opened).
-- **Phone won't connect over Wi-Fi:** in the Connect tab open "Phone can't
-  connect?" and press **Allow through Windows Firewall** (one admin prompt).
-  Also check the phone is on Wi-Fi, not mobile data. Then open
-  `https://<PC-IP>:8787/health` on the phone, accept the certificate
-  warning, and tap Connect again.
-- **Wrong IP in the QR (VPN, virtual machines):** pick the right address
-  under "Phone can't connect?" in the Connect tab.
-- **"Port 8787 is already in use":** the bridge is already running in another
-  window.
-- **Feed is choppy:** start the bridge with `set HC_FEED_FPS=15` (or lower)
-  first, or turn the feed off while driving.
+| Problem | Fix |
+|---|---|
+| Two or three Handheld Cam icons in the app bar | Old copies are installed. The Connect tab offers **Move old copies out**; restart AC afterwards. |
+| "Starting the phone link…" never finishes | Status tab → Phone link log. Reinstall from the release zip. From a git checkout, install Node.js and run `Install.bat` again. |
+| Phone can't connect over Wi-Fi | Connect tab → **Phone can't connect?** → **Allow through Windows Firewall** (one admin prompt; it can hide behind the game, so Alt+Tab). Check the phone is on Wi-Fi, not mobile data. |
+| Phone says certificate error / nothing loads | Open `https://<code>:8787/health` on the phone, accept the warning, then tap Connect again. |
+| Wrong address in the QR | Connect tab → **Phone can't connect?** → pick the address on your home network. |
+| Phone says **NO GAME** | Open the Handheld Cam window in game. CSP only starts the app once its window has been opened. |
+| Live feed stutters the game | Turn the feed off while driving, or set `HC_FEED_FPS=15` before starting `Start Handheld Cam.bat`. |
+| "Port 8787 is already in use" | Another copy of the phone link is already running (for example `Start Handheld Cam.bat`). The game uses that one. |
 
-## Requirements
+## How it works
 
-- Assetto Corsa with Content Manager and Custom Shaders Patch.
-- [Node.js](https://nodejs.org) (LTS) on the PC running the bridge.
-- A phone with a modern browser (Chrome on Android, Safari on iOS).
+<p align="center">
+  <img src="docs/images/how-it-works.svg" alt="Phone to phone link to Assetto Corsa" width="820">
+</p>
+
+- **`phone-app/`**: the web app on your phone. It reads orientation as a
+  quaternion (the sensor's own quaternion on Android Chrome, orientation
+  events on iPhone), never raw Euler angles, which flip at 90°. Sensitivity
+  is applied to an unwrapped rotation, so it stays smooth through any
+  number of full turns. It streams at the display rate together with zoom,
+  mode and the thumbstick. `look.js` renders the feed through the looks
+  with WebGL and records it with the browser's MediaRecorder.
+- **`bridge/`**: a small Node.js server (the "phone link"). It serves the
+  phone app over HTTPS with its own certificate, relays packets to the game
+  over local UDP and status back to the phone, lets one phone control the
+  camera at a time, serves the pairing QR to the in-game window, and
+  captures the monitor the game is on for the live feed.
+- **`lua-app/HandheldCam/`**: the CSP Lua app. It starts the phone link,
+  listens on UDP 9191, timestamps samples on the phone's clock, plays them
+  back slightly behind real time (30 to 150 ms, adapting to how jittery
+  the Wi-Fi is) and interpolates between them, so bursty packets become
+  continuous motion. It applies the result to the camera with real lens
+  maths for zoom.
+
+<p align="center">
+  <img src="docs/images/pair-page.jpg" alt="PC pairing page" width="300"><br>
+  <sub>The same QR is also at <code>https://&lt;PC-IP&gt;:8787/pair</code> in a browser on the PC.</sub>
+</p>
+
+### Certificates
+
+The phone link makes its own self-signed certificate for `localhost`,
+`127.0.0.1` and your PC's network address, and remakes it if the address
+changes (the phone asks you to accept it once more). It lives in the
+`bridge\certs` folder of the installed app, or in
+`%LOCALAPPDATA%\HandheldCam\certs` if that folder isn't writable.
+
+## Development
+
+```
+lua-app/HandheldCam/   in-game CSP app (HandheldCam.lua, manifest.ini, icon.png)
+bridge/                phone link: server.js (Node.js)
+phone-app/             phone web app: index.html, app.js, motion.js, look.js
+tools/                 build-release.ps1 (Content Manager zip)
+docs/images/           README images
+assets/                design prompts and generated artwork
+```
+
+`Start Handheld Cam.bat` runs the phone link in its own console window,
+which is handy while developing; the game then uses that copy.
 
 ## License
 
