@@ -70,7 +70,10 @@ input { user-select: text; -webkit-user-select: text; }
     url('/preview.jpg') center/cover no-repeat, #0c0d10;
 }
 #stage.feed-on #backdrop { display: none; }
-#stage.xr-on #feed, #stage.xr-on #backdrop { display: none; }  /* AR passthrough shows through */
+/* AR: the camera passthrough shows through. The feed and look canvas only
+   go invisible, so a recording in progress keeps getting frames. */
+#stage.xr-on #backdrop { display: none; }
+#stage.xr-on #feed, #stage.xr-on #look { visibility: hidden; }
 
 /* photo flash: the whole frame blinks white, like a shutter */
 #flash {

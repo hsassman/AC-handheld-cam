@@ -269,6 +269,13 @@
 
   // Shared per-frame motion step. Driven by the normal rAF loop for gyro, and
   // by the XR frame loop while an AR session is active (window rAF pauses then).
+  // Draw the live feed through the look. Called from whichever animation
+  // loop is running, so recording keeps going during AR, where the page's
+  // own requestAnimationFrame is paused.
+  function renderLook(now) {
+    if (lookR && feedOn && lookR.frame(now)) el('stage').classList.add('gl-on');
+  }
+
   function stepMotion(now) {
     const dt = lastStep ? clamp((now - lastStep) / 1000, 0.001, 0.1) : 1 / 60;
     lastStep = now;
@@ -292,7 +299,7 @@
 
   function tick(now) {
     if (!xrActive) stepMotion(now);              // XR drives its own steps
-    if (lookR && feedOn && !xrActive && lookR.frame(now)) el('stage').classList.add('gl-on');
+    if (!xrActive) renderLook(now);              // XR renders from its own loop
     requestAnimationFrame(tick);
   }
 
@@ -1120,7 +1127,16 @@
   }
 
   // ---------------- video: REC records the graded feed to the phone ----------------
-  let pendingFile = null;             // { blob, ext, type } when the share sheet needs a fresh tap
+  // Captures waiting for a tap on the save chip (the share sheet needed a
+  // fresh gesture). A queue, so a second capture never replaces the first.
+  const pendingFiles = [];
+  function showPendingChip() {
+    const chip = el('video-chip');
+    chip.hidden = pendingFiles.length === 0;
+    if (!pendingFiles.length) return;
+    const next = pendingFiles[0].ext === 'jpg' ? 'PHOTO' : 'VIDEO';
+    chip.textContent = pendingFiles.length > 1 ? `${pendingFiles.length} READY · SAVE ${next}` : `${next} READY · SAVE`;
+  }
   let videoStartWanted = false;
 
   function videoExt(type) { return /mp4/.test(type) ? 'mp4' : 'webm'; }
@@ -1160,9 +1176,8 @@
   }
 
   el('video-chip').addEventListener('click', () => {
-    const f = pendingFile;
-    pendingFile = null;
-    el('video-chip').hidden = true;
+    const f = pendingFiles.shift();
+    showPendingChip();
     if (f) deliverFile(f.blob, f.ext, f.type);
   });
 
@@ -1184,9 +1199,8 @@
         // The share sheet needs a fresh tap, and a recording finishes a
         // moment after the tap that stopped it: offer one instead of failing.
         if (e && e.name === 'NotAllowedError') {
-          pendingFile = { blob, ext, type };
-          el('video-chip').textContent = ext === 'jpg' ? 'PHOTO READY · SAVE' : 'VIDEO READY · SAVE';
-          el('video-chip').hidden = false;
+          pendingFiles.push({ blob, ext, type });
+          showPendingChip();
           toast('TAP SAVE TO KEEP IT', 1600);
           return;
         }
@@ -1404,6 +1418,7 @@
       const onXRFrame = (t, frame) => {
         if (!xrActive) return;
         session.requestAnimationFrame(onXRFrame);
+        renderLook(t);                                      // even when tracking has no pose
         const pose = frame.getViewerPose(xrRefSpace);
         if (!pose) return;
         const o = pose.transform.orientation, p = pose.transform.position;

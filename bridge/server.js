@@ -453,6 +453,12 @@ process.on('unhandledRejection', (err) => {
 udp.bind(0, '127.0.0.1', () => {
   qrServer.listen(QR_PORT, '127.0.0.1');
   httpsServer.listen(HTTP_PORT, () => {
+    // Started by the game: its output goes to the in-game Status tab, so keep
+    // it to the facts instead of console-window instructions.
+    if (process.env.HC_LAUNCHED_BY === 'game') {
+      console.log(`Phone link ${VERSION} running. Connect code ${LAN_IP}, port ${HTTP_PORT}.`);
+      return;
+    }
     const line = '-'.repeat(56);
     console.log('\n' + line);
     console.log(`  Handheld Cam bridge ${VERSION} is running`);
