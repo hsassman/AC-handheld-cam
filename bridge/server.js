@@ -173,10 +173,27 @@ let monitor = null;
 // one-poll-interval delay after a frame is ready.
 const feedViewers = new Set();
 
+// Capture the monitor the game is on (not just the primary one, which on a
+// multi-screen rig is often a dashboard or Discord). Re-checked every few
+// seconds, since AC may start, move or go fullscreen after the bridge.
+let monitorPickedAt = 0;
+function findGameMonitor() {
+  try {
+    const { Window } = require('node-screenshots');
+    const w = Window.all().find((win) => {
+      try {
+        return !win.isMinimized() && (/^acs(\.exe)?$/i.test(win.appName()) || /assetto corsa/i.test(win.title()));
+      } catch (e) { return false; }
+    });
+    return w ? w.currentMonitor() : null;
+  } catch (e) { return null; }
+}
 function getMonitor() {
-  if (monitor || !Monitor) return monitor;
+  if (!Monitor) return null;
+  if (monitor && Date.now() - monitorPickedAt < 5000) return monitor;
+  monitorPickedAt = Date.now();
   const monitors = Monitor.all();
-  monitor = monitors.find((m) => m.isPrimary()) || monitors[0] || null;
+  monitor = findGameMonitor() || monitors.find((m) => m.isPrimary()) || monitors[0] || null;
   return monitor;
 }
 

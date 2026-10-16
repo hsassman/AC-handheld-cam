@@ -223,8 +223,17 @@
     if (document.visibilityState === 'visible') {
       if (settings.wake) requestWakeLock();
       if (ws && ws.readyState !== WebSocket.OPEN && wsUrl) ensureConnected(wsUrl);
-    } else if (stickVec.x || stickVec.y) {
-      endMove();                          // never leave the camera walking
+    } else {
+      // Hidden mid-press (notification, app switch, lock): drop the pending
+      // hold timer too, or it fires later and engages/walks the camera on
+      // its own. Clear `press` first so lostpointercapture is a no-op.
+      if (press) {
+        const id = press.id;
+        clearTimeout(press.timer);
+        press = null;
+        try { shutter.releasePointerCapture(id); } catch (_) {}
+      }
+      if (stickVec.x || stickVec.y || stick.classList.contains('on')) endMove();  // never leave the camera walking
     }
   });
 
@@ -1283,9 +1292,15 @@
         optionalFeatures: ['local-floor', 'dom-overlay'],
         domOverlay: { root: document.body },
       });
-      xrSession = session;
+      // A 'viewer' space can't stand in here: poses in it are always the
+      // identity, so the camera would never move. Without a tracked 'local'
+      // space, end the session we just opened instead of leaking it.
       try { xrRefSpace = await session.requestReferenceSpace('local'); }
-      catch (e) { xrRefSpace = await session.requestReferenceSpace('viewer'); }
+      catch (e) {
+        try { await session.end(); } catch (_) {}
+        throw new Error('this phone has no AR tracking space');
+      }
+      xrSession = session;
       xrActive = true;
       xrEverUsed = true;
       let calibrated = false;
