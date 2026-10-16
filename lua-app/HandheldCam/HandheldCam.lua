@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.4.0'
+local VERSION = '0.4.1'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -894,9 +894,20 @@ end
 -- process to AC, so it also closes with the game. If a bridge is already
 -- running (Start Handheld Cam.bat, or a dev copy), that one is used as is.
 -- ============================================================
+-- CSP can hand back the script folder relative to the AC folder. io.* calls
+-- resolve that fine, but a program started in another working directory
+-- can't, which is exactly how the phone link failed to find server.js.
+local function absolutePath(p)
+  p = p:gsub('/', '\\'):gsub('\\+$', '')
+  if p:match('^%a:\\') or p:match('^\\\\') then return p end
+  local root = ac.getFolder(ac.FolderID.Root):gsub('/', '\\'):gsub('\\+$', '')
+  return root .. '\\' .. p:gsub('^%.\\', '')
+end
+
 local APP_DIR = ac.getFolder(ac.FolderID.ScriptOrigin)
 if type(APP_DIR) ~= 'string' or APP_DIR == '' then APP_DIR = ac.dirname() end
-APP_DIR = APP_DIR:gsub('[/\\]+$', '')
+APP_DIR = absolutePath(APP_DIR)
+local BRIDGE_DIR = APP_DIR .. '\\bridge'
 
 local BRIDGE_RETRIES = 3
 local bridge = {
@@ -914,7 +925,10 @@ local function bridgeLog(text)
     line = line:gsub('%s+$', '')
     if line ~= '' and not line:match('^%-+$') then
       bridge.log[#bridge.log + 1] = line
-      if #bridge.log > 30 then table.remove(bridge.log, 1) end
+      if #bridge.log > 60 then table.remove(bridge.log, 1) end
+      -- remember the headline of a crash; the stack trace that follows
+      -- would otherwise push it out of view
+      if line:match('^%w*Error') or line:match('^%[!%]') then bridge.errorLine = line end
     end
   end
 end
@@ -947,8 +961,7 @@ local function nodeCommand(script)
 end
 
 local function launchBridge()
-  local script = APP_DIR .. '\\bridge\\server.js'
-  if not io.fileExists(script) or not io.dirExists(APP_DIR .. '\\bridge\\node_modules') then
+  if not io.fileExists(BRIDGE_DIR .. '\\server.js') or not io.dirExists(BRIDGE_DIR .. '\\node_modules') then
     bridge.state = 'missing'
     return
   end
@@ -961,14 +974,15 @@ local function launchBridge()
   bridge.state = 'starting'
   bridge.ours = true
   bridge.exitNote = nil
-  local exe, args = nodeCommand(script)
+  bridge.errorLine = nil
+  local exe, args = nodeCommand(BRIDGE_DIR .. '\\server.js')
   local env = { HC_LAUNCHED_BY = 'game' }
   if config.lanIp ~= '' then env.HC_IP = config.lanIp end
-  bridgeLog('Starting the phone link...')
+  bridgeLog('Starting: ' .. exe .. ' ' .. table.concat(args, ' ') .. '  (in ' .. BRIDGE_DIR .. ')')
   local ok, ret = pcall(os.runConsoleProcess, {
     filename = exe,
     arguments = args,
-    workingDirectory = APP_DIR .. '\\bridge',
+    workingDirectory = BRIDGE_DIR,
     inheritEnvironment = true,
     environment = env,
     terminateWithScript = 'disposable',
@@ -1163,8 +1177,8 @@ local function drawPairing()
   elseif bridge.state == 'failed' and bridge.attempts >= BRIDGE_RETRIES then
     statusDot(COL_BAD)
     ui.textColored('The phone link would not start', COL_BAD)
-    if bridge.exitNote then ui.textWrapped(bridge.exitNote) end
-    for i = math.max(1, #bridge.log - 3), #bridge.log do ui.textColored(bridge.log[i], COL_DIM) end
+    ui.textWrapped(bridge.errorLine or bridge.exitNote or 'No error message.')
+    ui.textColored('Full log: Status tab.', COL_DIM)
     if ui.button('Try again', vec2(ui.availableSpaceX(), 0)) then restartBridge() end
   else
     statusDot(COL_WARN)
