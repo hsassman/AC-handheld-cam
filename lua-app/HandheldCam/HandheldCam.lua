@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.3.6'
+local VERSION = '0.4.0'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -40,6 +40,8 @@ local DEFAULTS = {
 
   -- device axes -> car body axes; flip a sign if a direction feels mirrored
   signPitch = 1.0, signYaw = 1.0, signRoll = 1.0,
+
+  lanIp = '',             -- address put in the pairing QR; '' = pick automatically
 }
 
 local stored = ac.storage(DEFAULTS)
@@ -158,27 +160,47 @@ end
 -- ============================================================
 local socketOk, socket = pcall(require, 'shared/socket')
 local udp = nil
+local nextBindTry = -1e9
 if not socketOk then
   state.socketError = "require('socket') failed: " .. tostring(socket)
 end
 
+-- Bind exclusively. This used to set SO_REUSEADDR so a hot reload could
+-- rebind straight away, but on Windows that also lets a second copy of the
+-- app (an old backup folder left in apps/lua) bind the same port, and the OS
+-- then hands each datagram to just one of them: the phone looked connected
+-- while an old copy quietly ate the packets. Now the socket is closed on
+-- unload instead, and a second copy fails loudly (see the duplicate check).
 local function ensureSocket()
-  if not socketOk then return end
-  if udp ~= nil then return end
+  if not socketOk or udp ~= nil then return end
+  if sim.time < nextBindTry then return end
+  nextBindTry = sim.time + 2000
   local ok, sockOrErr = pcall(function()
     local s = socket.udp()
     s:settimeout(0)
-    -- Allow rebinding the port. CSP hot-reloads the script (and on a fresh
-    -- Lua state the old `udp` is gone) while the previous socket may still
-    -- hold UDP 9191 for a moment; without SO_REUSEADDR that bind fails with
-    -- "address already in use". Must be set before setsockname().
-    pcall(function() s:setoption('reuseaddr', true) end)
     local bindOk, bindErr = s:setsockname('127.0.0.1', config.udpPort)
-    if not bindOk then error('setsockname failed: ' .. tostring(bindErr)) end
+    if not bindOk then
+      pcall(function() s:close() end)
+      error(tostring(bindErr), 0)
+    end
     return s
   end)
-  if ok then udp = sockOrErr; state.socketError = nil
-  else state.socketError = tostring(sockOrErr) end
+  if ok then
+    udp = sockOrErr
+    state.socketError = nil
+  else
+    local e = tostring(sockOrErr)
+    if e:find('in use') or e:find('already') then
+      e = 'UDP ' .. config.udpPort .. ' is taken, most likely by another copy of Handheld Cam (see the warning at the top).'
+    end
+    state.socketError = e
+  end
+end
+
+if type(ac.onRelease) == 'function' then
+  ac.onRelease(function()
+    if udp then pcall(function() udp:close() end); udp = nil end
+  end)
 end
 
 -- Packet format from the bridge (JSON, one object per datagram):
@@ -311,6 +333,13 @@ local function sendStatus()
   pcall(function() udp:sendto(msg, state.peerIp, state.peerPort) end)
 end
 
+-- The bridge sends a tiny hello datagram every second while it runs, so the
+-- game reports in (and the phone stops saying NO GAME) even before any
+-- motion packet has arrived.
+local function handleHello()
+  state.lastStatus = -1e9   -- answer straight away
+end
+
 local function pollNetwork()
   ensureSocket()
   if udp == nil then return end
@@ -325,6 +354,9 @@ local function pollNetwork()
     if pkt then
       state.peerIp, state.peerPort = ip, port
       handlePacket(pkt)
+    elseif data:find('"hello"', 1, true) then
+      state.peerIp, state.peerPort = ip, port
+      handleHello()
     else
       state.lastRecvError = 'received datagram but failed to decode: ' .. tostring(data):sub(1, 80)
     end
@@ -666,8 +698,11 @@ end
 -- ============================================================
 -- CSP lifecycle
 -- ============================================================
+local pollBridge -- defined with the UI below
+
 function script.update(dt)
   pollNetwork()
+  pollBridge()
   if btnToggle and btnToggle:pressed() then toggleEngaged() end
   if btnRecenter and btnRecenter:pressed() then calibrate(false) end
   updateSmoothing(dt)
@@ -854,65 +889,315 @@ local function drawAttitude(size)
 end
 
 -- ============================================================
--- Pairing QR, fetched from the bridge over localhost so the phone can be
--- paired straight from the in-game window (no terminal needed).
+-- The bridge (phone link). The game starts it by itself from the app
+-- folder, so players never have to run anything outside AC. CSP ties the
+-- process to AC, so it also closes with the game. If a bridge is already
+-- running (Start Handheld Cam.bat, or a dev copy), that one is used as is.
 -- ============================================================
-local pairing = { qrImage = nil, info = nil, lastTry = -1e9, error = nil }
+local APP_DIR = ac.getFolder(ac.FolderID.ScriptOrigin)
+if type(APP_DIR) ~= 'string' or APP_DIR == '' then APP_DIR = ac.dirname() end
+APP_DIR = APP_DIR:gsub('[/\\]+$', '')
 
-local function pollPairing()
-  if pairing.qrImage and pairing.info then return end
-  if (sim.time - pairing.lastTry) < 2500 then return end
-  pairing.lastTry = sim.time
-  if not pairing.qrImage then
-    web.get('http://127.0.0.1:8788/qr.png', function(err, res)
-      if err then pairing.error = 'bridge not running'; return end
-      if res and res.status == 200 and res.body then
-        local img = ui.decodeImage(res.body)
-        if img then pairing.qrImage = img; pairing.error = nil
-        else pairing.error = 'could not decode QR' end
-      else
-        pairing.error = 'bridge not running'
-      end
-    end)
-  end
-  if not pairing.info then
-    web.get('http://127.0.0.1:8788/info', function(err, res)
-      if not err and res and res.status == 200 and res.body then
-        local ok, parsed = pcall(JSON.parse, res.body)
-        if ok and type(parsed) == 'table' then pairing.info = parsed end
-      end
-    end)
+local BRIDGE_RETRIES = 3
+local bridge = {
+  state = 'probing',   -- probing | starting | running | failed | missing
+  ours = false,        -- we launched it (vs. one that was already running)
+  proc = nil, attempts = 0, nextLaunch = 0, exitNote = nil,
+  log = {},
+  info = nil, lastProbe = -1e9, probing = false,
+  qrImage = nil, qrFor = nil, qrBusy = false,
+  firewallNote = nil,
+}
+
+local function bridgeLog(text)
+  for line in tostring(text):gmatch('[^\r\n]+') do
+    line = line:gsub('%s+$', '')
+    if line ~= '' and not line:match('^%-+$') then
+      bridge.log[#bridge.log + 1] = line
+      if #bridge.log > 30 then table.remove(bridge.log, 1) end
+    end
   end
 end
 
+-- Windows known folders by GUID (ac.getFolder accepts those), so this works
+-- whether or not the CSP sandbox exposes os.getenv.
+local function knownFolder(guid)
+  local ok, v = pcall(ac.getFolder, guid)
+  if ok and type(v) == 'string' and v ~= '' then return v end
+  return nil
+end
+local FOLDER_PROGRAM_FILES = '{6D809377-6AF0-444b-8957-A3773F02200E}'  -- 64-bit Program Files
+local FOLDER_SYSTEM        = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}'  -- System32
+local SYSTEM32 = knownFolder(FOLDER_SYSTEM) or 'C:\\Windows\\System32'
+
+-- Prefer the Node runtime shipped inside the app (release zip), then a
+-- normal Node.js install, then whatever `node` is on PATH via cmd.
+local function nodeCommand(script)
+  local candidates = { APP_DIR .. '\\runtime\\node.exe' }
+  local pf = knownFolder(FOLDER_PROGRAM_FILES)
+  if pf then candidates[#candidates + 1] = pf .. '\\nodejs\\node.exe' end
+  local local_ = ac.getFolder(ac.FolderID.AppDataLocal)
+  if type(local_) == 'string' and local_ ~= '' then
+    candidates[#candidates + 1] = local_ .. '\\Programs\\nodejs\\node.exe'
+  end
+  for _, c in ipairs(candidates) do
+    if io.fileExists(c) then return c, { script } end
+  end
+  return SYSTEM32 .. '\\cmd.exe', { '/d', '/c', 'node', script }
+end
+
+local function launchBridge()
+  local script = APP_DIR .. '\\bridge\\server.js'
+  if not io.fileExists(script) or not io.dirExists(APP_DIR .. '\\bridge\\node_modules') then
+    bridge.state = 'missing'
+    return
+  end
+  if type(os.runConsoleProcess) ~= 'function' then
+    bridge.state = 'missing'
+    bridge.exitNote = 'This CSP version cannot start programs. Run "Start Handheld Cam.bat" instead.'
+    return
+  end
+  bridge.attempts = bridge.attempts + 1
+  bridge.state = 'starting'
+  bridge.ours = true
+  bridge.exitNote = nil
+  local exe, args = nodeCommand(script)
+  local env = { HC_LAUNCHED_BY = 'game' }
+  if config.lanIp ~= '' then env.HC_IP = config.lanIp end
+  bridgeLog('Starting the phone link...')
+  local ok, ret = pcall(os.runConsoleProcess, {
+    filename = exe,
+    arguments = args,
+    workingDirectory = APP_DIR .. '\\bridge',
+    inheritEnvironment = true,
+    environment = env,
+    terminateWithScript = 'disposable',
+    dataCallback = function(_, data) bridgeLog(data) end,
+  }, function(e, result)
+    bridge.proc = nil
+    local code = result and result.exitCode
+    bridge.exitNote = e and tostring(e) or ('it stopped (exit code ' .. tostring(code) .. ')')
+    bridgeLog('Phone link: ' .. bridge.exitNote)
+    bridge.state = 'failed'
+    bridge.info = nil
+    bridge.nextLaunch = sim.time + 4000
+  end)
+  if not ok then
+    bridge.state = 'failed'
+    bridge.exitNote = tostring(ret)
+  else
+    bridge.proc = ret or true   -- the disposable on CSP builds that return one
+  end
+end
+
+local function stopOurBridge()
+  local p = bridge.proc
+  if type(p) == 'table' or type(p) == 'userdata' then
+    pcall(function() p:dispose() end)
+  elseif type(p) == 'function' then
+    pcall(p)
+  end
+  bridge.proc = nil
+end
+
+local function restartBridge()
+  stopOurBridge()
+  bridge.info = nil
+  bridge.qrImage, bridge.qrFor = nil, nil
+  bridge.attempts = 0
+  bridge.nextLaunch = sim.time + 1500   -- let the old one free its ports
+  bridge.state = 'probing'
+end
+
+local function fetchQr()
+  if bridge.qrBusy then return end
+  bridge.qrBusy = true
+  local want = bridge.info and bridge.info.url
+  web.get('http://127.0.0.1:8788/qr.png', function(err, res)
+    bridge.qrBusy = false
+    if err or not res or res.status ~= 200 or not res.body then return end
+    local img = ui.decodeImage(res.body)
+    if img then bridge.qrImage, bridge.qrFor = img, want end
+  end)
+end
+
+-- Polled every couple of seconds from script.update, so the link status is
+-- honest and a bridge that died gets restarted.
+pollBridge = function()
+  if bridge.probing or sim.time - bridge.lastProbe < 2000 then return end
+  bridge.lastProbe = sim.time
+  bridge.probing = true
+  web.get('http://127.0.0.1:8788/info', function(err, res)
+    bridge.probing = false
+    local parsed
+    if not err and res and res.status == 200 and res.body then
+      local ok, p = pcall(JSON.parse, res.body)
+      if ok and type(p) == 'table' and p.ip then parsed = p end
+    end
+    if parsed then
+      bridge.info = parsed
+      bridge.state = 'running'
+      bridge.attempts = 0
+      if bridge.qrFor ~= parsed.url or not bridge.qrImage then fetchQr() end
+      return
+    end
+    -- nothing answered
+    bridge.info = nil
+    if bridge.state == 'running' then
+      bridge.state = 'failed'
+      bridge.exitNote = bridge.exitNote or 'The phone link stopped answering.'
+    end
+    if bridge.state == 'missing' then return end
+    if bridge.proc ~= nil then return end           -- ours is still starting up
+    if sim.time >= bridge.nextLaunch and bridge.attempts < BRIDGE_RETRIES then
+      launchBridge()
+    elseif bridge.state == 'probing' then
+      bridge.state = 'failed'
+    end
+  end)
+end
+
+-- A port rule (not a program rule), so it covers the bundled runtime and a
+-- system Node alike, on every network profile. Needs one admin prompt.
+local function allowThroughFirewall()
+  local ps = SYSTEM32 .. '\\WindowsPowerShell\\v1.0\\powershell.exe'
+  local netsh = 'netsh advfirewall firewall delete rule name=HandheldCam >nul 2>&1 & '
+    .. 'netsh advfirewall firewall add rule name=HandheldCam dir=in action=allow protocol=TCP localport=8787 profile=any'
+  bridge.firewallNote = 'Approve the Windows prompt. It may be hidden behind the game: Alt+Tab to it.'
+  local ok, err = pcall(os.runConsoleProcess, {
+    filename = ps,
+    arguments = { '-NoProfile', '-NonInteractive', '-Command',
+      "try { Start-Process cmd.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '/c " .. netsh .. "' -ErrorAction Stop; 'HC_OK' } catch { 'HC_CANCELLED' }" },
+    timeout = 180000,
+  }, function(e, result)
+    local out = result and result.stdout or ''
+    if out:find('HC_OK', 1, true) then bridge.firewallNote = 'Done. Phones on your network can now reach this PC.'
+    elseif out:find('HC_CANCELLED', 1, true) then bridge.firewallNote = 'Cancelled, nothing was changed.'
+    else bridge.firewallNote = 'Could not change the firewall: ' .. tostring(e or out) end
+  end)
+  if not ok then bridge.firewallNote = 'Could not change the firewall: ' .. tostring(err) end
+end
+
+-- ============================================================
+-- Duplicate installs. Every folder in apps/lua is a separate app to CSP, so
+-- a backup copy (HandheldCam.bak, "HandheldCam - Copy"...) loads as well,
+-- shows up as another icon in the app bar and fights this one for the
+-- phone's packets.
+-- ============================================================
+local dupes = { list = {}, checkedAt = -1e9, note = nil }
+
+local function scanDuplicates()
+  dupes.checkedAt = sim.time
+  local root = ac.getFolder(ac.FolderID.ACAppsLua)
+  local mine = io.getFileName(APP_DIR)
+  local found = {}
+  if type(root) == 'string' and root ~= '' then
+    pcall(io.scanDir, root, '*', function(name, attrs)
+      if attrs and attrs.isDirectory and name ~= mine and name ~= '.' and name ~= '..'
+          and io.fileExists(root .. '\\' .. name .. '\\HandheldCam.lua') then
+        found[#found + 1] = name
+      end
+    end)
+  end
+  dupes.list = found
+end
+
+local function moveDuplicatesOut()
+  local root = ac.getFolder(ac.FolderID.ACAppsLua)
+  local dest = ac.getFolder(ac.FolderID.ACApps) .. '\\HandheldCam-old-copies'
+  io.createDir(dest)
+  local moved, failed = 0, 0
+  for _, name in ipairs(dupes.list) do
+    if io.move(root .. '\\' .. name, dest .. '\\' .. name .. '-' .. os.time(), false) then moved = moved + 1
+    else failed = failed + 1 end
+  end
+  dupes.note = failed == 0
+    and string.format('Moved %d old cop%s to apps\\HandheldCam-old-copies. Restart AC to finish.', moved, moved == 1 and 'y' or 'ies')
+    or 'Some copies could not be moved. Close AC and delete them from apps\\lua by hand.'
+  scanDuplicates()
+end
+
+local function drawDuplicateWarning()
+  if sim.time - dupes.checkedAt > 10000 then scanDuplicates() end
+  if #dupes.list == 0 then
+    if dupes.note then ui.textColored(dupes.note, COL_OK) end
+    return
+  end
+  ui.pushStyleColor(ui.StyleColor.Text, COL_BAD)
+  ui.textWrapped(string.format("%d other cop%s of Handheld Cam %s installed (%s). They steal the phone's data.",
+    #dupes.list, #dupes.list == 1 and 'y' or 'ies', #dupes.list == 1 and 'is' or 'are', table.concat(dupes.list, ', ')))
+  ui.popStyleColor()
+  if coloredButton('Move old copies out', vec2(ui.availableSpaceX(), 0), BTN_STOP) then moveDuplicatesOut() end
+  ui.offsetCursorY(4)
+end
+
 local function drawPairing()
-  pollPairing()
-  if pairing.qrImage then
-    local qr = math.max(120, math.min(200, ui.availableSpaceX() * 0.5))
-    ui.image(pairing.qrImage, vec2(qr, qr))
-    ui.sameLine(0, 12)
+  local info = bridge.info
+  if bridge.state == 'running' and info then
+    if bridge.qrImage then
+      local qr = math.max(120, math.min(220, ui.availableSpaceX() * 0.5))
+      ui.image(bridge.qrImage, vec2(qr, qr))
+      ui.sameLine(0, 12)
+    end
     ui.beginGroup()
     ui.textColored('1. Scan with your', COL_DIM)
     ui.textColored("   phone's camera", COL_DIM)
     ui.offsetCursorY(4)
-    ui.textColored('2. Accept the certificate', COL_DIM)
-    ui.textColored('   warning once', COL_DIM)
+    ui.textColored('2. First time only: tap', COL_DIM)
+    ui.textColored('   Advanced > Proceed', COL_DIM)
     ui.offsetCursorY(4)
     ui.textColored('3. Tap Connect', COL_DIM)
-    if pairing.info then
-      ui.offsetCursorY(10)
-      ui.textColored('Or type this code:', COL_DIM)
-      ui.pushFont(ui.Font.Title)
-      ui.textColored(tostring(pairing.info.ip), COL_ACCENT)
-      ui.popFont()
+    ui.offsetCursorY(10)
+    ui.textColored('Or type this code:', COL_DIM)
+    ui.pushFont(ui.Font.Title)
+    ui.textColored(tostring(info.ip), COL_ACCENT)
+    ui.popFont()
+    if type(info.phones) == 'number' and info.phones > 0 then
+      ui.textColored(string.format('%d phone%s connected', info.phones, info.phones == 1 and '' or 's'), COL_OK)
     end
     ui.endGroup()
+  elseif bridge.state == 'missing' then
+    statusDot(COL_BAD)
+    ui.textColored('Phone link files are missing', COL_BAD)
+    ui.textWrapped(bridge.exitNote or 'Reinstall Handheld Cam: drag the release zip into Content Manager, or run Install.bat.')
+  elseif bridge.state == 'failed' and bridge.attempts >= BRIDGE_RETRIES then
+    statusDot(COL_BAD)
+    ui.textColored('The phone link would not start', COL_BAD)
+    if bridge.exitNote then ui.textWrapped(bridge.exitNote) end
+    for i = math.max(1, #bridge.log - 3), #bridge.log do ui.textColored(bridge.log[i], COL_DIM) end
+    if ui.button('Try again', vec2(ui.availableSpaceX(), 0)) then restartBridge() end
   else
     statusDot(COL_WARN)
-    ui.textColored('Waiting for the bridge…', COL_WARN)
-    ui.textWrapped('Double-click "Start Handheld Cam.bat" in the mod folder and keep its window open. The pairing QR appears here by itself.')
-    if pairing.error then ui.textColored('(' .. pairing.error .. ')', COL_DIM) end
+    ui.textColored('Starting the phone link...', COL_WARN)
+    ui.textColored('The pairing QR appears here in a moment.', COL_DIM)
   end
+
+  ui.offsetCursorY(8)
+  ui.treeNode("Phone can't connect?", ui.TreeNodeFlags.None, function()
+    ui.textWrapped('Phone and PC must be on the same network (phone on Wi-Fi, not mobile data).')
+    ui.offsetCursorY(4)
+    if ui.button('Allow through Windows Firewall', vec2(ui.availableSpaceX(), 0)) then allowThroughFirewall() end
+    tip('Opens port 8787 to phones on your network. Asks for admin permission once.')
+    if bridge.firewallNote then ui.textWrapped(bridge.firewallNote) end
+    if info and type(info.others) == 'table' and #info.others > 0 then
+      ui.offsetCursorY(4)
+      ui.textWrapped('Wrong address in the QR? Pick the one on your home network:')
+      local choices = { info.ip }
+      for _, ip in ipairs(info.others) do choices[#choices + 1] = ip end
+      for _, ip in ipairs(choices) do
+        if ui.radioButton(ip, ip == info.ip) and ip ~= info.ip then
+          config.lanIp = ip
+          if bridge.ours then restartBridge() end
+        end
+      end
+      if config.lanIp ~= '' and ui.button('Back to automatic') then
+        config.lanIp = ''
+        if bridge.ours then restartBridge() end
+      end
+      if not bridge.ours then ui.textColored('(restart the bridge window to apply)', COL_DIM) end
+    end
+    if bridge.ours and ui.button('Restart phone link') then restartBridge() end
+  end)
 end
 
 local function zoomText()
@@ -932,9 +1217,14 @@ local function drawHeader()
   if state.connected then
     statusDot(COL_OK)
     ui.textColored('PHONE LIVE', COL_OK)
-  elseif pairing.error and not pairing.qrImage then
+  elseif #dupes.list > 0 then
     statusDot(COL_BAD)
-    ui.textColored('BRIDGE NOT RUNNING', COL_BAD)
+    ui.textColored('DUPLICATE COPIES INSTALLED', COL_BAD)
+  elseif bridge.state ~= 'running' then
+    local pending = bridge.state == 'starting' or bridge.state == 'probing'
+    local col = pending and COL_WARN or COL_BAD
+    statusDot(col)
+    ui.textColored(pending and 'STARTING PHONE LINK' or 'PHONE LINK DOWN', col)
   else
     statusDot(COL_WARN)
     ui.textColored('WAITING FOR PHONE', COL_WARN)
@@ -1115,6 +1405,9 @@ local function drawStatusTab()
     if col then ui.textColored(value, col) else ui.text(value) end
   end
   section('Link')
+  row('Phone link', bridge.state == 'running'
+      and ((bridge.ours and 'running (started by the game)' or 'running') .. (bridge.info and bridge.info.ip and (', ' .. bridge.info.ip) or ''))
+      or bridge.state, bridge.state == 'running' and COL_OK or COL_WARN)
   row('Socket', socketOk and (udp and ('bound, UDP ' .. config.udpPort) or 'binding…') or 'unavailable',
     socketOk and udp and COL_OK or COL_BAD)
   row('Phone', state.connected and 'streaming' or 'no data', state.connected and COL_OK or COL_WARN)
@@ -1140,6 +1433,13 @@ local function drawStatusTab()
   row('Viewfinder', state.phoneFilter or 'off')
   ui.textColored('(filters only change the phone viewfinder, not what the game renders)', COL_DIM)
 
+  if #bridge.log > 0 then
+    section('Phone link log')
+    ui.pushFont(ui.Font.Small)
+    for i = math.max(1, #bridge.log - 11), #bridge.log do ui.textColored(bridge.log[i], COL_DIM) end
+    ui.popFont()
+  end
+
   section('About')
   row('Version', VERSION)
 end
@@ -1149,6 +1449,7 @@ function script.windowMain(dt)
   ui.tabBar('hh_tabs', function()
     ui.tabItem('Connect', function()
       ui.offsetCursorY(4)
+      drawDuplicateWarning()
       if state.connected then
         statusDot(COL_OK)
         ui.textColored('Phone paired and streaming.', COL_OK)

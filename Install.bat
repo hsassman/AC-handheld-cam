@@ -6,8 +6,8 @@ REM ============================================================
 REM  Double-click this file (or drag your "assettocorsa" folder
 REM  onto it) to install both halves of the mod:
 REM    1. the CSP Lua app  -> assettocorsa\apps\lua\HandheldCam
-REM    2. the bridge's dependencies (so "Start Handheld Cam.bat"
-REM       just works, no typing anything in a terminal)
+REM    2. the phone link (bridge + phone web app) inside that same
+REM       folder; the game starts it by itself
 REM  Safe to run again at any time to update.
 REM ============================================================
 
@@ -61,22 +61,15 @@ if not exist "%ACPATH%\apps\lua" (
 )
 
 echo Found Assetto Corsa: %ACPATH%
-echo Installing the in-game app...
-robocopy "%ROOT%lua-app\HandheldCam" "%ACPATH%\apps\lua\HandheldCam" /MIR /NFL /NDL /NJH /NJS >nul
-if errorlevel 8 (
-  echo [!] Copying the app failed. Is Assetto Corsa running? Close it and try again.
-  pause
-  exit /b 1
-)
-echo   done.
 
 where node >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo [!] Node.js is required for the bridge ^(the small program that
+  echo [!] Node.js is required for the phone link ^(the small program that
   echo     relays your phone's motion to the game^) and wasn't found.
   echo     Grab the LTS installer from https://nodejs.org, run it, then
   echo     run this installer again.
+  echo     ^(The release zip from GitHub includes everything and needs no Node.js.^)
   echo.
   start "" https://nodejs.org
   pause
@@ -87,8 +80,8 @@ pushd "%ROOT%bridge"
 REM (re)install when missing or out of date, e.g. after updating the mod
 call npm ls --depth=0 >nul 2>nul
 if errorlevel 1 (
-  echo Installing the bridge's dependencies ^(needs internet^)...
-  call npm install --no-fund --no-audit
+  echo Installing the phone link's dependencies ^(needs internet^)...
+  call npm install --omit=dev --no-fund --no-audit
   if errorlevel 1 (
     popd
     echo [!] npm install failed. Check your internet connection and run this again.
@@ -98,11 +91,39 @@ if errorlevel 1 (
 )
 popd
 
+set "APPDIR=%ACPATH%\apps\lua\HandheldCam"
+
+REM Every folder in apps\lua is its own app to CSP, so a backup copy of this
+REM one (HandheldCam.bak, "HandheldCam - Copy") also loads, shows up as a
+REM second icon and steals the phone's packets. Park them outside apps\lua.
+for /d %%D in ("%ACPATH%\apps\lua\*") do (
+  if /i not "%%~nxD"=="HandheldCam" if exist "%%~fD\HandheldCam.lua" (
+    echo Moving an old copy out of the way: %%~nxD
+    if not exist "%ACPATH%\apps\HandheldCam-old-copies" mkdir "%ACPATH%\apps\HandheldCam-old-copies"
+    move "%%~fD" "%ACPATH%\apps\HandheldCam-old-copies\%%~nxD-%RANDOM%" >nul
+  )
+)
+
+echo Installing the in-game app...
+robocopy "%ROOT%lua-app\HandheldCam" "%APPDIR%" /MIR /XD bridge phone-app runtime /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 goto copyfail
+robocopy "%ROOT%bridge" "%APPDIR%\bridge" /MIR /XD certs /XF *.bat *.sh /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 goto copyfail
+robocopy "%ROOT%phone-app" "%APPDIR%\phone-app" /MIR /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 goto copyfail
+echo   done.
+
 echo.
 echo ============================================================
 echo   Installed. In Content Manager, enable "Handheld Cam" under
-echo   Apps, then run "Start Handheld Cam.bat" whenever you want to
-echo   play - it starts the bridge and shows the pairing QR in-game.
+echo   Apps, open its window in-game and scan the QR code. The game
+echo   starts the phone link by itself; nothing else to run.
 echo ============================================================
 echo.
 pause
+exit /b 0
+
+:copyfail
+echo [!] Copying the app failed. Is Assetto Corsa running? Close it and try again.
+pause
+exit /b 1

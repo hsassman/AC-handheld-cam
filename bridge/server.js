@@ -23,7 +23,24 @@ const LUA_UDP_PORT = 9191; // must match HandheldCam.lua config.udpPort
 const GAME_LINK_TIMEOUT = 2000; // ms without a status datagram = game not listening
 
 const PHONE_APP_DIR = path.join(__dirname, '..', 'phone-app');
-const CERT_DIR = path.join(__dirname, 'certs');
+const VERSION = require('./package.json').version;
+
+// Certificates live next to the bridge when that folder is writable (a git
+// checkout), otherwise in %LOCALAPPDATA% (e.g. AC installed under Program
+// Files, where the game's own copy of the bridge can't write).
+function writableDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, '.write-test');
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return true;
+  } catch (e) { return false; }
+}
+const CERT_DIR = process.env.HC_CERT_DIR
+  || [path.join(__dirname, 'certs'),
+      path.join(process.env.LOCALAPPDATA || os.homedir(), 'HandheldCam', 'certs')].find(writableDir)
+  || path.join(__dirname, 'certs');
 
 // Virtual adapters (VMs, WSL, VPNs) often grab a 192.168.x.x or 10.x address
 // too; a phone on the home Wi-Fi can't reach any of them.
@@ -127,12 +144,16 @@ udp.on('message', (msg) => {
   if (!gameLinked) { gameLinked = true; console.log('Game linked: Handheld Cam is listening in-game.'); }
   broadcast({ type: 'game', ...status });
 });
+// Say hello to the game every second so it reports in (and learns where to
+// send status) before any phone has sent a motion packet.
+const HELLO = Buffer.from('{"type":"hello"}');
 setInterval(() => {
+  udp.send(HELLO, 0, HELLO.length, LUA_UDP_PORT, LUA_UDP_HOST, () => {});
   if (gameLinked && Date.now() - lastGameStatusAt > GAME_LINK_TIMEOUT) {
     gameLinked = false;
     console.log('Game link lost (is the Handheld Cam window open in-game?).');
   }
-}, 500);
+}, 1000);
 
 // --- desktop capture, re-served to the phone as an MJPEG "game feed" ---
 // Only runs while a phone is actually viewing /feed. Captures back-to-back,
@@ -371,8 +392,9 @@ const qrServer = http.createServer((req, res) => {
   if (p === '/info') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({
-      ip: LAN_IP, port: HTTP_PORT, url: CONNECT_URL,
-      phones: wss.clients.size,
+      ip: LAN_IP, port: HTTP_PORT, url: CONNECT_URL, version: VERSION,
+      phones: [...wss.clients].filter((c) => c.readyState === WebSocket.OPEN).length,
+      game: gameLinked,
       others: lanCandidates().map((c) => c.address).filter((a) => a !== LAN_IP),
     }));
   }
@@ -416,7 +438,7 @@ udp.bind(0, '127.0.0.1', () => {
   httpsServer.listen(HTTP_PORT, () => {
     const line = '-'.repeat(56);
     console.log('\n' + line);
-    console.log('  Handheld Cam bridge is running');
+    console.log(`  Handheld Cam bridge ${VERSION} is running`);
     console.log(line);
     console.log(`  Connect code : ${LAN_IP}`);
     console.log(`  Pair page    : ${CONNECT_URL}/pair   (big QR on this PC)`);
