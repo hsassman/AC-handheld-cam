@@ -88,7 +88,7 @@ on the PC (replays, OBS) and use the phone to operate the camera.
 | Problem | Fix |
 |---|---|
 | Two or more Handheld Cam icons | Old copies are installed. Connect tab → **Move old copies out**, then restart AC |
-| "The phone link would not start" | Update to 0.4.1 or newer (fixes `MODULE_NOT_FOUND`). Otherwise see Status → Phone link log |
+| "The phone link would not start" | Update to 0.4.2 or newer (fixes `MODULE_NOT_FOUND`). Otherwise see Status → Phone link log |
 | Phone can't connect | Connect tab → **Phone can't connect?** → **Allow through Windows Firewall**. Phone must be on Wi-Fi |
 | Wrong address in the QR | Same section: pick the address on your home network |
 | Phone shows **NO GAME** | Open the Handheld Cam window in game |
@@ -109,8 +109,13 @@ on the PC (replays, OBS) and use the phone to operate the camera.
 
 ## What's new
 
+**0.4.2**
+- Fixed the phone link not starting in game: CSP's argument quoting broke the
+  path to the phone link (the real cause of `MODULE_NOT_FOUND`).
+- The game now reconnects to the phone link after CSP reloads the app.
+- The phone link's output also goes to CSP's log, for troubleshooting.
+
 **0.4.1**
-- Fixed the phone link failing to start in game (`MODULE_NOT_FOUND`).
 - Recording keeps working in AR mode; photos and videos waiting to be saved are queued, never replaced.
 
 **0.4.0**

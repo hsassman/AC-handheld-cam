@@ -58,7 +58,12 @@ const HOST = {
     const argv = luaArray(params.arguments);
     const cwd = params.workingDirectory;
     report.spawned.push({ file, argv, cwd });
-    const child = spawn(file, argv, { cwd, env: { ...process.env, ...(params.environment || {}) }, windowsHide: true });
+    // rawArguments: CSP hands the joined arguments to Windows as the whole
+    // command line, program name included. Node's spawn adds the program
+    // name itself, so the first argument is dropped here to match.
+    const raw = !!params.rawArguments;
+    const child = spawn(file, raw ? [argv.slice(1).join(' ')] : argv,
+      { cwd, env: { ...process.env, ...(params.environment || {}) }, windowsHide: true, windowsVerbatimArguments: raw });
     children.push(child);
     const onData = (buf) => {
       const text = buf.toString();

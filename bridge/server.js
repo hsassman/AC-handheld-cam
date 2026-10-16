@@ -18,8 +18,7 @@ const QRCode = require('qrcode');
 
 const HTTP_PORT = 8787;    // phone-facing HTTPS (app + WebSocket)
 const QR_PORT = 8788;      // localhost-only helper the in-game app reads
-const LUA_UDP_HOST = '127.0.0.1';
-const LUA_UDP_PORT = 9191; // must match HandheldCam.lua config.udpPort
+const GAME_UDP_PORT = 9192; // must match BRIDGE_PORT in HandheldCam.lua
 const GAME_LINK_TIMEOUT = 2000; // ms without a status datagram = game not listening
 
 const PHONE_APP_DIR = path.join(__dirname, '..', 'phone-app');
@@ -121,35 +120,44 @@ const { keyPath, certPath } = ensureCerts();
 const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
 
 // --- UDP link with the game (both directions) ---
+// This side owns the fixed port. The game binds any free port and sends a
+// status datagram several times a second; whoever did so recently gets the
+// phone's packets. That way a reloaded game script (CSP may keep the old
+// one's socket open) can always link up again.
 const udp = dgram.createSocket('udp4');
-udp.on('error', (err) => console.error('UDP error:', err.message));
+udp.on('error', (err) => (err.code === 'EADDRINUSE' ? fatalListen(GAME_UDP_PORT, err)
+  : console.error('UDP error:', err.message)));
+const gamePeers = new Map();   // "address:port" -> last time it reported in
+let lastGameStatus = null;
+let gameLinked = false;
+
 function sendToGame(jsonString) {
   const buf = Buffer.from(jsonString, 'utf8');
-  udp.send(buf, 0, buf.length, LUA_UDP_PORT, LUA_UDP_HOST, (err) => {
-    if (err) console.error('UDP send failed:', err.message);
-  });
+  const now = Date.now();
+  for (const [key, seen] of gamePeers) {
+    if (now - seen > GAME_LINK_TIMEOUT) { gamePeers.delete(key); continue; }
+    const [address, port] = key.split(':');
+    udp.send(buf, 0, buf.length, Number(port), address, (err) => {
+      if (err) console.error('UDP send failed:', err.message);
+    });
+  }
 }
 
-// The Lua app answers every few packets with a small status datagram. We pass
-// it on to the phones so they can show whether the game is actually listening.
-let lastGameStatus = null;
-let lastGameStatusAt = 0;
-let gameLinked = false;
-udp.on('message', (msg) => {
+// The status is passed on to the phones so they can show whether the game is
+// actually listening.
+udp.on('message', (msg, from) => {
   let status;
   try { status = JSON.parse(msg.toString('utf8')); } catch (e) { return; }
   if (!status || typeof status !== 'object') return;
+  gamePeers.set(`${from.address}:${from.port}`, Date.now());
   lastGameStatus = status;
-  lastGameStatusAt = Date.now();
   if (!gameLinked) { gameLinked = true; console.log('Game linked: Handheld Cam is listening in-game.'); }
   broadcast({ type: 'game', ...status });
 });
-// Say hello to the game every second so it reports in (and learns where to
-// send status) before any phone has sent a motion packet.
-const HELLO = Buffer.from('{"type":"hello"}');
 setInterval(() => {
-  udp.send(HELLO, 0, HELLO.length, LUA_UDP_PORT, LUA_UDP_HOST, () => {});
-  if (gameLinked && Date.now() - lastGameStatusAt > GAME_LINK_TIMEOUT) {
+  const now = Date.now();
+  for (const [key, seen] of gamePeers) if (now - seen > GAME_LINK_TIMEOUT) gamePeers.delete(key);
+  if (gameLinked && gamePeers.size === 0) {
     gameLinked = false;
     console.log('Game link lost (is the Handheld Cam window open in-game?).');
   }
@@ -449,8 +457,7 @@ process.on('unhandledRejection', (err) => {
   console.error('[!] Unhandled promise rejection:', err && err.message ? err.message : err);
 });
 
-// Bind to an ephemeral port so the Lua app has somewhere to send status back.
-udp.bind(0, '127.0.0.1', () => {
+udp.bind(GAME_UDP_PORT, '127.0.0.1', () => {
   qrServer.listen(QR_PORT, '127.0.0.1');
   httpsServer.listen(HTTP_PORT, () => {
     // Started by the game: its output goes to the in-game Status tab, so keep

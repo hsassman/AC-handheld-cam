@@ -14,7 +14,7 @@
 ]]
 
 local sim = ac.getSim()
-local VERSION = '0.4.1'
+local VERSION = '0.4.2'
 
 -- ============================================================
 -- Config (exposed in the app window, saved between sessions)
@@ -45,7 +45,8 @@ local DEFAULTS = {
 }
 
 local stored = ac.storage(DEFAULTS)
-local config = { udpPort = 9191 }  -- must match the bridge server's LUA_UDP_PORT
+local BRIDGE_PORT = 9192            -- phone link's UDP port (GAME_UDP_PORT in bridge/server.js)
+local config = {}
 for k, v in pairs(DEFAULTS) do
   local s = stored[k]
   config[k] = (type(s) == type(v)) and s or v
@@ -71,7 +72,8 @@ local RENDER_DELAY_MIN = 30   -- ms, floor even on a perfect link
 local RENDER_DELAY_MAX = 150  -- ms, ceiling so a bad link still bounds the lag
 local MAX_SAMPLES  = 24
 local WALK_LIMIT   = 500  -- metres; keeps a runaway thumbstick from losing the camera
-local STATUS_EVERY = 150  -- ms between status datagrams back to the bridge
+local STATUS_EVERY = 150  -- ms between status datagrams while a phone is streaming
+local STATUS_IDLE  = 500  -- ms between them otherwise (keeps the link registered)
 
 -- ============================================================
 -- State
@@ -131,7 +133,7 @@ local state = {
   camLook = nil, camUp = nil, carLook = nil,
 
   -- where status datagrams go (learned from the bridge's packets)
-  peerIp = nil, peerPort = nil, lastStatus = -1e9,
+  localPort = nil, lastStatus = -1e9,
 
   -- diagnostics
   socketError = nil,
@@ -165,12 +167,12 @@ if not socketOk then
   state.socketError = "require('socket') failed: " .. tostring(socket)
 end
 
--- Bind exclusively. This used to set SO_REUSEADDR so a hot reload could
--- rebind straight away, but on Windows that also lets a second copy of the
--- app (an old backup folder left in apps/lua) bind the same port, and the OS
--- then hands each datagram to just one of them: the phone looked connected
--- while an old copy quietly ate the packets. Now the socket is closed on
--- unload instead, and a second copy fails loudly (see the duplicate check).
+-- The phone link owns the fixed port (BRIDGE_PORT); the game takes any free
+-- port and checks in with a status datagram several times a second. The
+-- phone link sends motion to whoever checked in recently. A fixed port on
+-- this side broke whenever CSP reloaded the app: the unloaded copy kept the
+-- port (unload callbacks aren't guaranteed to run) and the new copy could
+-- never bind it again until AC restarted.
 local function ensureSocket()
   if not socketOk or udp ~= nil then return end
   if sim.time < nextBindTry then return end
@@ -178,7 +180,7 @@ local function ensureSocket()
   local ok, sockOrErr = pcall(function()
     local s = socket.udp()
     s:settimeout(0)
-    local bindOk, bindErr = s:setsockname('127.0.0.1', config.udpPort)
+    local bindOk, bindErr = s:setsockname('127.0.0.1', 0)
     if not bindOk then
       pcall(function() s:close() end)
       error(tostring(bindErr), 0)
@@ -188,12 +190,11 @@ local function ensureSocket()
   if ok then
     udp = sockOrErr
     state.socketError = nil
+    local _, port = udp:getsockname()
+    state.localPort = port
   else
-    local e = tostring(sockOrErr)
-    if e:find('in use') or e:find('already') then
-      e = 'UDP ' .. config.udpPort .. ' is taken, most likely by another copy of Handheld Cam (see the warning at the top).'
-    end
-    state.socketError = e
+    state.socketError = tostring(sockOrErr)
+    ac.warn('[socket] ' .. state.socketError)
   end
 end
 
@@ -320,8 +321,8 @@ end
 -- Tell the phone (via the bridge) what the game is actually doing, so it can
 -- show "live" only when the camera really is under its control.
 local function sendStatus()
-  if not udp or not state.peerIp then return end
-  if sim.time - state.lastStatus < STATUS_EVERY then return end
+  if not udp then return end
+  if sim.time - state.lastStatus < (state.connected and STATUS_EVERY or STATUS_IDLE) then return end
   state.lastStatus = sim.time
   local cam = state.grabbedCamera
   local msg = string.format(
@@ -330,14 +331,7 @@ local function sendStatus()
     state.appliedFov or 0, state.fovBase or 0, walkDistance(), jsonStr(config.anchorMode),
     tostring(config.applyPosition), tostring(config.applyZoom), state.shots,
     state.cameraError and (',"err":' .. jsonStr(state.cameraError)) or '')
-  pcall(function() udp:sendto(msg, state.peerIp, state.peerPort) end)
-end
-
--- The bridge sends a tiny hello datagram every second while it runs, so the
--- game reports in (and the phone stops saying NO GAME) even before any
--- motion packet has arrived.
-local function handleHello()
-  state.lastStatus = -1e9   -- answer straight away
+  pcall(function() udp:sendto(msg, '127.0.0.1', BRIDGE_PORT) end)
 end
 
 local function pollNetwork()
@@ -352,11 +346,7 @@ local function pollNetwork()
     end
     local pkt = decodePacket(data)
     if pkt then
-      state.peerIp, state.peerPort = ip, port
       handlePacket(pkt)
-    elseif data:find('"hello"', 1, true) then
-      state.peerIp, state.peerPort = ip, port
-      handleHello()
     else
       state.lastRecvError = 'received datagram but failed to decode: ' .. tostring(data):sub(1, 80)
     end
@@ -926,6 +916,7 @@ local function bridgeLog(text)
     if line ~= '' and not line:match('^%-+$') then
       bridge.log[#bridge.log + 1] = line
       if #bridge.log > 60 then table.remove(bridge.log, 1) end
+      ac.log('[phone link] ' .. line)     -- also into CSP's log, for support
       -- remember the headline of a crash; the stack trace that follows
       -- would otherwise push it out of view
       if line:match('^%w*Error') or line:match('^%[!%]') then bridge.errorLine = line end
@@ -946,6 +937,15 @@ local SYSTEM32 = knownFolder(FOLDER_SYSTEM) or 'C:\\Windows\\System32'
 
 -- Prefer the Node runtime shipped inside the app (release zip), then a
 -- normal Node.js install, then whatever `node` is on PATH via cmd.
+--
+-- Returns the program and its full command line, passed to CSP raw. Two
+-- things went wrong with CSP's own argument handling: its quoting left a
+-- stray quote on the script path (`server.js"`, so Node failed with
+-- MODULE_NOT_FOUND), and in raw mode the command line doesn't start with
+-- the program name, which Windows always reads as the first word. So the
+-- line here starts with the quoted program, then the quoted script.
+local function q(s) return '"' .. s .. '"' end
+
 local function nodeCommand(script)
   local candidates = { APP_DIR .. '\\runtime\\node.exe' }
   local pf = knownFolder(FOLDER_PROGRAM_FILES)
@@ -955,19 +955,22 @@ local function nodeCommand(script)
     candidates[#candidates + 1] = local_ .. '\\Programs\\nodejs\\node.exe'
   end
   for _, c in ipairs(candidates) do
-    if io.fileExists(c) then return c, { script } end
+    if io.fileExists(c) then return c, { q(c), q(script) } end
   end
-  return SYSTEM32 .. '\\cmd.exe', { '/d', '/c', 'node', script }
+  local cmd = SYSTEM32 .. '\\cmd.exe'
+  return cmd, { q(cmd), '/d /c node', q(script) }
 end
 
 local function launchBridge()
   if not io.fileExists(BRIDGE_DIR .. '\\server.js') or not io.dirExists(BRIDGE_DIR .. '\\node_modules') then
     bridge.state = 'missing'
+    bridgeLog('Missing files in ' .. BRIDGE_DIR)
     return
   end
   if type(os.runConsoleProcess) ~= 'function' then
     bridge.state = 'missing'
     bridge.exitNote = 'This CSP version cannot start programs. Run "Start Handheld Cam.bat" instead.'
+    bridgeLog(bridge.exitNote)
     return
   end
   bridge.attempts = bridge.attempts + 1
@@ -982,6 +985,7 @@ local function launchBridge()
   local ok, ret = pcall(os.runConsoleProcess, {
     filename = exe,
     arguments = args,
+    rawArguments = true,
     workingDirectory = BRIDGE_DIR,
     inheritEnvironment = true,
     environment = env,
@@ -999,6 +1003,7 @@ local function launchBridge()
   if not ok then
     bridge.state = 'failed'
     bridge.exitNote = tostring(ret)
+    bridgeLog('Could not start: ' .. bridge.exitNote)
   else
     bridge.proc = ret or true   -- the disposable on CSP builds that return one
   end
@@ -1422,7 +1427,7 @@ local function drawStatusTab()
   row('Phone link', bridge.state == 'running'
       and ((bridge.ours and 'running (started by the game)' or 'running') .. (bridge.info and bridge.info.ip and (', ' .. bridge.info.ip) or ''))
       or bridge.state, bridge.state == 'running' and COL_OK or COL_WARN)
-  row('Socket', socketOk and (udp and ('bound, UDP ' .. config.udpPort) or 'binding…') or 'unavailable',
+  row('Socket', socketOk and (udp and ('UDP ' .. tostring(state.localPort) .. ' -> ' .. BRIDGE_PORT) or 'binding…') or 'unavailable',
     socketOk and udp and COL_OK or COL_BAD)
   row('Phone', state.connected and 'streaming' or 'no data', state.connected and COL_OK or COL_WARN)
   row('Packets', tostring(state.packetsReceived))
